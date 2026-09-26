@@ -1,11 +1,33 @@
+import logging
 import os
 import re
+import time
 from datetime import datetime
+from functools import wraps
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask
-from zoneinfo import ZoneInfo
+from flask import Flask, jsonify, request
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("mirza")
 
 
 # =========================================================
@@ -16,6 +38,7 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+SEND_SECRET = os.environ.get("SEND_SECRET")  # برای محافظت از /send
 
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 
@@ -26,13 +49,75 @@ HEADERS = {
     )
 }
 
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "60"))
+
+if not BOT_TOKEN:
+    logger.warning("BOT_TOKEN تنظیم نشده - ارسال به تلگرام کار نخواهد کرد")
+
+if not CHAT_ID:
+    logger.warning("CHAT_ID تنظیم نشده - ارسال به تلگرام کار نخواهد کرد")
+
+if not SEND_SECRET:
+    logger.warning(
+        "SEND_SECRET تنظیم نشده - روت /send بدون محافظت در دسترس عموم است"
+    )
+
 
 # =========================================================
-# HTTP SESSION
+# HTTP SESSION (با retry خودکار)
 # =========================================================
 
-session = requests.Session()
-session.headers.update(HEADERS)
+def build_session():
+    s = requests.Session()
+    s.headers.update(HEADERS)
+
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+    )
+
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+
+    return s
+
+
+session = build_session()
+
+
+# =========================================================
+# SIMPLE TTL CACHE
+# =========================================================
+
+_cache_store = {}
+
+
+def ttl_cache(ttl_seconds):
+    """
+    کش ساده در حافظه برای جلوگیری از درخواست‌های تکراری و اسکرپ زیاد
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            key = (func.__name__, args, tuple(sorted(kwargs.items())))
+            now = time.time()
+
+            if key in _cache_store:
+                cached_value, cached_time = _cache_store[key]
+                if now - cached_time < ttl_seconds:
+                    return cached_value
+
+            value = func(*args, **kwargs)
+            _cache_store[key] = (value, now)
+            return value
+
+        return wrapper
+
+    return decorator
 
 
 # =========================================================
@@ -123,6 +208,26 @@ def change_text(change):
     return "⚪ 0.00%"
 
 
+def require_secret(func):
+    """
+    محافظت از روت‌های حساس با یک توکن مخفی در هدر یا کوئری
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not SEND_SECRET:
+            return func(*args, **kwargs)
+
+        provided = request.headers.get("X-Secret") or request.args.get("secret")
+
+        if provided != SEND_SECRET:
+            return jsonify({"status": "error", "error": "دسترسی غیرمجاز"}), 401
+
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 # =========================================================
 # TGJU
 # =========================================================
@@ -140,26 +245,15 @@ def get_tgju_current(profile_url):
     دریافت قیمت فعلی از صفحه شاخص TGJU
     """
 
-    response = session.get(
-        profile_url,
-        timeout=20
-    )
-
+    response = session.get(profile_url, timeout=20)
     response.raise_for_status()
 
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
-
+    soup = BeautifulSoup(response.text, "html.parser")
     text = soup.get_text(" ", strip=True)
 
     # الگوی:
     # نرخ فعلی:: 2,346,150
-    match = re.search(
-        r"نرخ فعلی\s*::?\s*([\d,]+)",
-        text
-    )
+    match = re.search(r"نرخ فعلی\s*::?\s*([\d,]+)", text)
 
     if not match:
         raise ValueError("قیمت فعلی پیدا نشد")
@@ -174,23 +268,14 @@ def get_tgju_previous_close(profile_url):
 
     history_url = profile_url.rstrip("/") + "/history"
 
-    response = session.get(
-        history_url,
-        timeout=20
-    )
-
+    response = session.get(history_url, timeout=20)
     response.raise_for_status()
 
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    # تمام جدول‌ها را بررسی می‌کنیم
     tables = soup.find_all("table")
 
     for table in tables:
-
         rows = table.find_all("tr")
 
         for row in rows[1:]:
@@ -199,21 +284,10 @@ def get_tgju_previous_close(profile_url):
             if len(cells) < 5:
                 continue
 
-            values = [
-                cell.get_text(" ", strip=True)
-                for cell in cells
-            ]
+            values = [cell.get_text(" ", strip=True) for cell in cells]
 
             # ساختار تاریخچه TGJU:
-            #
-            # بازگشایی
-            # کمترین
-            # بیشترین
-            # پایانی
-            # میزان تغییر
-            # درصد تغییر
-            # تاریخ
-
+            # بازگشایی / کمترین / بیشترین / پایانی / میزان تغییر / درصد تغییر / تاریخ
             closing_price = clean_number(values[4 - 1])
 
             if closing_price:
@@ -222,25 +296,19 @@ def get_tgju_previous_close(profile_url):
     return None
 
 
+@ttl_cache(CACHE_TTL_SECONDS)
 def get_tgju_prices():
     """
-    دریافت قیمت‌های بازار ایران
+    دریافت قیمت‌های بازار ایران (با کش برای جلوگیری از اسکرپ مکرر)
     """
 
     result = {}
 
     for name, url in TGJU_PROFILES.items():
-
         try:
-
             current = get_tgju_current(url)
-
             previous = get_tgju_previous_close(url)
-
-            change = calculate_change(
-                current,
-                previous
-            )
+            change = calculate_change(current, previous)
 
             result[name] = {
                 "current": current,
@@ -248,17 +316,13 @@ def get_tgju_prices():
                 "change": change,
             }
 
+        except requests.exceptions.RequestException as e:
+            logger.error("TGJU خطای شبکه - %s: %s", name, e)
+            result[name] = {"current": None, "previous": None, "change": None}
+
         except Exception as e:
-
-            print(
-                f"TGJU error - {name}: {e}"
-            )
-
-            result[name] = {
-                "current": None,
-                "previous": None,
-                "change": None,
-            }
+            logger.error("TGJU خطا - %s: %s", name, e)
+            result[name] = {"current": None, "previous": None, "change": None}
 
     return result
 
@@ -267,20 +331,17 @@ def get_tgju_prices():
 # CRYPTO
 # =========================================================
 
+@ttl_cache(CACHE_TTL_SECONDS)
 def get_crypto_prices():
 
     url = (
         "https://api.coingecko.com/api/v3/simple/price"
-        "?ids=bitcoin,ethereum"
+        "?ids=bitcoin,ethereum,tether"
         "&vs_currencies=usd"
         "&include_24hr_change=true"
     )
 
-    response = session.get(
-        url,
-        timeout=20
-    )
-
+    response = session.get(url, timeout=20)
     response.raise_for_status()
 
     data = response.json()
@@ -288,19 +349,16 @@ def get_crypto_prices():
     return {
         "bitcoin": {
             "price": data["bitcoin"]["usd"],
-            "change": data["bitcoin"].get(
-                "usd_24h_change",
-                0
-            )
+            "change": data["bitcoin"].get("usd_24h_change", 0),
         },
-
         "ethereum": {
             "price": data["ethereum"]["usd"],
-            "change": data["ethereum"].get(
-                "usd_24h_change",
-                0
-            )
-        }
+            "change": data["ethereum"].get("usd_24h_change", 0),
+        },
+        "tether": {
+            "price": data.get("tether", {}).get("usd"),
+            "change": data.get("tether", {}).get("usd_24h_change", 0),
+        },
     }
 
 
@@ -308,25 +366,19 @@ def get_crypto_prices():
 # FEAR & GREED
 # =========================================================
 
+@ttl_cache(CACHE_TTL_SECONDS)
 def get_fear_greed():
 
-    url = (
-        "https://api.alternative.me/fng/"
-        "?limit=1"
-    )
+    url = "https://api.alternative.me/fng/?limit=1"
 
-    response = session.get(
-        url,
-        timeout=20
-    )
-
+    response = session.get(url, timeout=20)
     response.raise_for_status()
 
     data = response.json()["data"][0]
 
     return {
         "value": int(data["value"]),
-        "classification": data["value_classification"]
+        "classification": data["value_classification"],
     }
 
 
@@ -356,22 +408,14 @@ TSETMC_CLIENT_TYPE_URL = (
 )
 
 
+@ttl_cache(CACHE_TTL_SECONDS)
 def get_tsetmc_money_flow():
 
     try:
-
-        response = session.get(
-            TSETMC_CLIENT_TYPE_URL,
-            timeout=20
-        )
-
+        response = session.get(TSETMC_CLIENT_TYPE_URL, timeout=20)
         response.raise_for_status()
 
         data = response.json()
-
-        # -------------------------------------------------
-        # پیدا کردن لیست اصلی
-        # -------------------------------------------------
 
         records = None
 
@@ -379,76 +423,41 @@ def get_tsetmc_money_flow():
             records = data
 
         elif isinstance(data, dict):
-
-            for key in [
-                "clientTypeAllDto",
-                "clientTypeAll",
-                "clientType"
-            ]:
-
+            for key in ["clientTypeAllDto", "clientTypeAll", "clientType"]:
                 if key in data:
                     records = data[key]
                     break
 
         if not records:
-            raise ValueError(
-                "داده حقیقی/حقوقی دریافت نشد"
-            )
+            raise ValueError("داده حقیقی/حقوقی دریافت نشد")
 
         real_buy = 0
         real_sell = 0
 
-        # -------------------------------------------------
-        # جمع خرید و فروش حقیقی کل بازار
-        # -------------------------------------------------
-
         for item in records:
-
             if not isinstance(item, dict):
                 continue
 
-            buy_value = (
-                item.get("buy_I_Value")
-                or item.get("buyIValue")
-                or 0
-            )
+            buy_value = item.get("buy_I_Value") or item.get("buyIValue") or 0
+            sell_value = item.get("sell_I_Value") or item.get("sellIValue") or 0
 
-            sell_value = (
-                item.get("sell_I_Value")
-                or item.get("sellIValue")
-                or 0
-            )
-
-            buy_value = clean_number(
-                buy_value
-            ) or 0
-
-            sell_value = clean_number(
-                sell_value
-            ) or 0
+            buy_value = clean_number(buy_value) or 0
+            sell_value = clean_number(sell_value) or 0
 
             real_buy += buy_value
             real_sell += sell_value
 
         net_flow = real_buy - real_sell
 
-        return {
-            "buy": real_buy,
-            "sell": real_sell,
-            "net": net_flow
-        }
+        return {"buy": real_buy, "sell": real_sell, "net": net_flow}
+
+    except requests.exceptions.RequestException as e:
+        logger.error("TSETMC خطای شبکه: %s", e)
+        return {"buy": None, "sell": None, "net": None}
 
     except Exception as e:
-
-        print(
-            f"TSETMC error: {e}"
-        )
-
-        return {
-            "buy": None,
-            "sell": None,
-            "net": None
-        }
+        logger.error("TSETMC خطا: %s", e)
+        return {"buy": None, "sell": None, "net": None}
 
 
 # =========================================================
@@ -466,7 +475,6 @@ def money_flow_message(flow):
         )
 
     if net > 0:
-
         return (
             "🏦 بورس تهران\n\n"
             f"🟢 ورود پول حقیقی\n"
@@ -474,34 +482,23 @@ def money_flow_message(flow):
         )
 
     if net < 0:
-
         return (
             "🏦 بورس تهران\n\n"
             f"🔴 خروج پول حقیقی\n"
             f"💰 {format_money(abs(net))}"
         )
 
-    return (
-        "🏦 بورس تهران\n\n"
-        "⚪ ورود و خروج پول تقریباً برابر"
-    )
+    return "🏦 بورس تهران\n\n⚪ ورود و خروج پول تقریباً برابر"
 
 
 # =========================================================
 # MARKET ITEM
 # =========================================================
 
-def market_item(
-    title,
-    emoji,
-    data
-):
+def market_item(title, emoji, data):
 
     if not data:
-        return (
-            f"{emoji} {title}\n"
-            "💰 نامشخص"
-        )
+        return f"{emoji} {title}\n💰 نامشخص"
 
     current = data.get("current")
     previous = data.get("previous")
@@ -522,21 +519,15 @@ def market_item(
 def build_message():
 
     tgju = get_tgju_prices()
-
     crypto = get_crypto_prices()
-
     fear = get_fear_greed()
-
     money_flow = get_tsetmc_money_flow()
 
-    now = datetime.now(
-        TEHRAN_TZ
-    ).strftime(
-        "%Y/%m/%d - %H:%M"
-    )
+    now = datetime.now(TEHRAN_TZ).strftime("%Y/%m/%d - %H:%M")
 
     bitcoin = crypto["bitcoin"]
     ethereum = crypto["ethereum"]
+    tether = crypto["tether"]
 
     fear_value = fear["value"]
     fear_classification = fear["classification"]
@@ -547,29 +538,13 @@ def build_message():
 
 🏦 <b>بازار ایران</b>
 
-{market_item(
-    "طلای ۱۸ عیار",
-    "🟡",
-    tgju["gold"]
-)}
+{market_item("طلای ۱۸ عیار", "🟡", tgju["gold"])}
 
-{market_item(
-    "سکه امامی",
-    "🪙",
-    tgju["coin"]
-)}
+{market_item("سکه امامی", "🪙", tgju["coin"])}
 
-{market_item(
-    "دلار",
-    "💵",
-    tgju["dollar"]
-)}
+{market_item("دلار", "💵", tgju["dollar"])}
 
-{market_item(
-    "یورو",
-    "💶",
-    tgju["euro"]
-)}
+{market_item("یورو", "💶", tgju["euro"])}
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -582,6 +557,10 @@ def build_message():
 Ξ <b>اتریوم</b>
 💰 ${ethereum["price"]:,.2f}
 {change_text(ethereum["change"])}
+
+₮ <b>تتر</b>
+💰 ${tether["price"]:,.4f}
+{change_text(tether["change"])}
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -610,50 +589,49 @@ def build_message():
 def send_telegram(message):
 
     if not BOT_TOKEN:
-        raise ValueError(
-            "BOT_TOKEN تنظیم نشده است"
-        )
+        raise ValueError("BOT_TOKEN تنظیم نشده است")
 
     if not CHAT_ID:
-        raise ValueError(
-            "CHAT_ID تنظیم نشده است"
-        )
+        raise ValueError("CHAT_ID تنظیم نشده است")
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": CHAT_ID,
         "text": message,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True
+        "disable_web_page_preview": True,
     }
 
-    response = session.post(
-        url,
-        json=payload,
-        timeout=20
-    )
-
+    response = session.post(url, json=payload, timeout=20)
     response.raise_for_status()
 
     return response.json()
 
 
 # =========================================================
-# HOME
+# HOME / HEALTH
 # =========================================================
 
 @app.route("/")
 def home():
+    return jsonify(
+        {
+            "status": "online",
+            "bot": "Mirza",
+            "message": "Mirza Bot is running!",
+        }
+    )
 
-    return {
-        "status": "online",
-        "bot": "Mirza",
-        "message": "Mirza Bot is running!"
-    }
+
+@app.route("/health")
+def health():
+    return jsonify(
+        {
+            "status": "ok",
+            "time": datetime.now(TEHRAN_TZ).isoformat(),
+        }
+    )
 
 
 # =========================================================
@@ -661,28 +639,24 @@ def home():
 # =========================================================
 
 @app.route("/send")
+@require_secret
 def send():
 
     try:
-
         message = build_message()
+        result = send_telegram(message)
 
-        result = send_telegram(
-            message
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Message sent",
+                "telegram": result,
+            }
         )
 
-        return {
-            "status": "success",
-            "message": "Message sent",
-            "telegram": result
-        }
-
     except Exception as e:
-
-        return {
-            "status": "error",
-            "error": str(e)
-        }, 500
+        logger.exception("خطا در ارسال پیام")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 # =========================================================
@@ -693,21 +667,33 @@ def send():
 def prices():
 
     try:
-
-        return {
-            "status": "success",
-            "tgju": get_tgju_prices(),
-            "crypto": get_crypto_prices(),
-            "fear_greed": get_fear_greed(),
-            "money_flow": get_tsetmc_money_flow()
-        }
+        return jsonify(
+            {
+                "status": "success",
+                "tgju": get_tgju_prices(),
+                "crypto": get_crypto_prices(),
+                "fear_greed": get_fear_greed(),
+                "money_flow": get_tsetmc_money_flow(),
+            }
+        )
 
     except Exception as e:
+        logger.exception("خطا در دریافت قیمت‌ها")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
-        return {
-            "status": "error",
-            "error": str(e)
-        }, 500
+
+# =========================================================
+# ERROR HANDLERS
+# =========================================================
+
+@app.errorhandler(404)
+def not_found(_e):
+    return jsonify({"status": "error", "error": "مسیر پیدا نشد"}), 404
+
+
+@app.errorhandler(500)
+def server_error(_e):
+    return jsonify({"status": "error", "error": "خطای داخلی سرور"}), 500
 
 
 # =========================================================
@@ -716,14 +702,7 @@ def prices():
 
 if __name__ == "__main__":
 
-    port = int(
-        os.environ.get(
-            "PORT",
-            5000
-        )
-    )
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
 
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0", port=port, debug=debug)
