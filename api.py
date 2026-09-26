@@ -1,7 +1,7 @@
 import os
-import re
 import requests
 from flask import Flask
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -21,25 +21,37 @@ def get_prices():
     )
 
     response.raise_for_status()
-    text = response.text
 
-    def find_price(name):
-        # پیدا کردن نام بازار و اولین عدد بعد از آن
-        pattern = rf"{re.escape(name)}.*?([\d,]+)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        if match:
-            return match.group(1)
-
-        return "نامشخص"
+    soup = BeautifulSoup(response.text, "html.parser")
 
     prices = {
-        "gold18": find_price("طلا ۱۸"),
-        "coin": find_price("سکه"),
-        "dollar": find_price("دلار"),
-        "euro": find_price("یورو"),
-        "bitcoin": find_price("بیت کوین")
+        "gold": "نامشخص",
+        "coin": "نامشخص",
+        "dollar": "نامشخص",
+        "euro": "نامشخص",
+        "bitcoin": "نامشخص"
     }
+
+    # پیدا کردن قیمت‌ها از جدول/ویجت
+    rows = soup.find_all("tr")
+
+    for row in rows:
+        text = row.get_text(" ", strip=True)
+
+        if "طلای 18" in text or "طلای ۱۸" in text:
+            prices["gold"] = text
+
+        elif "سکه امامی" in text:
+            prices["coin"] = text
+
+        elif "دلار" in text:
+            prices["dollar"] = text
+
+        elif "یورو" in text:
+            prices["euro"] = text
+
+        elif "بیت کوین" in text or "بیت‌کوین" in text:
+            prices["bitcoin"] = text
 
     return prices
 
@@ -71,13 +83,14 @@ def send():
 
     message = f"""📊 Mirza Market
 
-🟡 طلای ۱۸ عیار: {prices['gold18']}
-🪙 سکه امامی: {prices['coin']}
-💵 دلار: {prices['dollar']}
-💶 یورو: {prices['euro']}
-₿ بیت‌کوین: {prices['bitcoin']}
+🟡 طلای ۱۸ عیار: {prices["gold"]}
+🪙 سکه امامی: {prices["coin"]}
+💵 دلار: {prices["dollar"]}
+💶 یورو: {prices["euro"]}
+₿ بیت‌کوین: {prices["bitcoin"]}
 
-🔄 آخرین بروزرسانی از TGJU"""
+🔄 آخرین بروزرسانی از TGJU
+"""
 
     send_message(message)
 
