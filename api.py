@@ -1,25 +1,35 @@
-from flask import Flask, jsonify
-import requests
 import os
+import requests
+from flask import Flask
 
 app = Flask(__name__)
 
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+def send_message(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    })
+
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "Mirza Bot is running!"
 
 @app.route("/send")
 def send():
-    token = os.environ.get("BOT_TOKEN")
-    chat_id = os.environ.get("CHAT_ID")
+    # فعلاً پیام تست برای اطمینان از اتصال
+    message = """📊 <b>Mirza Market</b>
 
-    message = "🤖 تست ربات با موفقیت انجام شد"
+🟡 طلای ۱۸ عیار: در حال دریافت
+🪙 سکه امامی: در حال دریافت
+💵 دلار: در حال دریافت
+₿ بیت‌کوین: در حال دریافت
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+🔄 سیستم فعال است."""
 
-    requests.post(url, data={
-        "chat_id": chat_id,
-        "text": message
-    })
-
-    return jsonify({"status": "sent"})
+    send_message(message)
+    return "Message sent!"
