@@ -1,9 +1,13 @@
 import os
 import re
 import requests
-from flask import Flask
+from flask import Flask, jsonify
 
 app = Flask(__name__)
+
+# =========================
+# Environment Variables
+# =========================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -11,7 +15,12 @@ CHAT_ID = os.environ.get("CHAT_ID")
 TGJU_URL = "https://www.tgju.org/widget/get/market-data"
 
 
+# =========================
+# دریافت قیمت‌ها از TGJU
+# =========================
+
 def get_prices():
+
     response = requests.get(
         TGJU_URL,
         headers={
@@ -21,14 +30,17 @@ def get_prices():
     )
 
     response.raise_for_status()
+
     html = response.text
 
-    # استخراج اطلاعات بازار از متن صفحه
+    # تبدیل HTML به متن ساده
     text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
 
     def find_price(name):
-        pattern = rf"{name}\s+([\d,]+)\s*\(([-\d.]+)%\)"
+
+        pattern = rf"{name}\s+([\d,]+)\s*\(([-+]?\d+(?:\.\d+)?)%\)"
+
         match = re.search(pattern, text)
 
         if match:
@@ -45,28 +57,75 @@ def get_prices():
     }
 
 
+# =========================
+# تشخیص وضعیت تغییر قیمت
+# =========================
+
+def change_icon(change):
+
+    try:
+
+        value = float(change)
+
+        if value > 0:
+            return "🟢"
+
+        elif value < 0:
+            return "🔴"
+
+        return "⚪"
+
+    except:
+        return "⚪"
+
+
+# =========================
+# ارسال پیام به Telegram
+# =========================
+
 def send_message(text):
+
+    if not BOT_TOKEN:
+        raise Exception("BOT_TOKEN تنظیم نشده است.")
+
+    if not CHAT_ID:
+        raise Exception("CHAT_ID تنظیم نشده است.")
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     response = requests.post(
         url,
         data={
             "chat_id": CHAT_ID,
-            "text": text
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
         },
         timeout=20
     )
 
     response.raise_for_status()
 
+    return response.json()
+
+
+# =========================
+# صفحه اصلی
+# =========================
 
 @app.route("/")
 def home():
-    return "Mirza Bot is running!"
 
+    return "Mirza Bot is running! ✅"
+
+
+# =========================
+# ارسال قیمت‌ها به کانال
+# =========================
 
 @app.route("/send")
 def send():
+
     prices = get_prices()
 
     gold, gold_change = prices["gold18"]
@@ -75,31 +134,73 @@ def send():
     euro, euro_change = prices["euro"]
     bitcoin, bitcoin_change = prices["bitcoin"]
 
-    message = f"""📊 <b>Mirza Market</b>
+    message = f"""
+<b>╔══════════════════════╗</b>
+<b>          MIRZA</b>
+<b>╚══════════════════════╝</b>
 
-🟡 <b>طلای ۱۸ عیار:</b> {gold}
-📈 تغییر: {gold_change}٪
+📊 <b>آخرین وضعیت بازار</b>
 
-🪙 <b>سکه امامی:</b> {coin}
-📈 تغییر: {coin_change}٪
+━━━━━━━━━━━━━━━━━━
 
-💵 <b>دلار:</b> {dollar}
-📈 تغییر: {dollar_change}٪
+🟡 <b>طلای ۱۸ عیار</b>
+💰 <b>{gold}</b>
+{change_icon(gold_change)} تغییر: <b>{gold_change}%</b>
 
-💶 <b>یورو:</b> {euro}
-📈 تغییر: {euro_change}٪
+━━━━━━━━━━━━━━━━━━
 
-₿ <b>بیت‌کوین:</b> {bitcoin}
-📈 تغییر: {bitcoin_change}٪
+🪙 <b>سکه امامی</b>
+💰 <b>{coin}</b>
+{change_icon(coin_change)} تغییر: <b>{coin_change}%</b>
 
-🔄 بروزرسانی از TGJU
+━━━━━━━━━━━━━━━━━━
+
+💵 <b>دلار</b>
+💰 <b>{dollar}</b>
+{change_icon(dollar_change)} تغییر: <b>{dollar_change}%</b>
+
+━━━━━━━━━━━━━━━━━━
+
+💶 <b>یورو</b>
+💰 <b>{euro}</b>
+{change_icon(euro_change)} تغییر: <b>{euro_change}%</b>
+
+━━━━━━━━━━━━━━━━━━
+
+₿ <b>بیت‌کوین</b>
+💰 <b>{bitcoin}</b>
+{change_icon(bitcoin_change)} تغییر: <b>{bitcoin_change}%</b>
+
+━━━━━━━━━━━━━━━━━━
+
+🔄 <i>منبع قیمت‌ها: TGJU</i>
+🤖 <b>Mirza</b>
 """
 
     send_message(message)
 
-    return "Message sent successfully!"
+    return "Message sent successfully! ✅"
 
+
+# =========================
+# مشاهده قیمت‌ها
+# =========================
 
 @app.route("/prices")
 def prices():
-    return get_prices()
+
+    return jsonify(get_prices())
+
+
+# =========================
+# اجرای برنامه
+# =========================
+
+if __name__ == "__main__":
+
+    port = int(os.environ.get("PORT", 5000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+        )
