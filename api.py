@@ -5,10 +5,6 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# =========================
-# Environment Variables
-# =========================
-
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -16,7 +12,7 @@ TGJU_URL = "https://www.tgju.org/widget/get/market-data"
 
 
 # =========================
-# دریافت قیمت‌ها از TGJU
+# دریافت قیمت‌ها
 # =========================
 
 def get_prices():
@@ -33,7 +29,6 @@ def get_prices():
 
     html = response.text
 
-    # تبدیل HTML به متن ساده
     text = re.sub(r"<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
 
@@ -58,19 +53,18 @@ def get_prices():
 
 
 # =========================
-# تشخیص وضعیت تغییر قیمت
+# آیکون تغییر قیمت
 # =========================
 
 def change_icon(change):
 
     try:
-
         value = float(change)
 
         if value > 0:
             return "🟢"
 
-        elif value < 0:
+        if value < 0:
             return "🔴"
 
         return "⚪"
@@ -80,7 +74,7 @@ def change_icon(change):
 
 
 # =========================
-# ارسال پیام به Telegram
+# ارسال پیام به تلگرام
 # =========================
 
 def send_message(text):
@@ -116,11 +110,11 @@ def send_message(text):
 @app.route("/")
 def home():
 
-    return "Mirza Bot is running! ✅"
+    return "📊 MIRZA Bot is running!"
 
 
 # =========================
-# ارسال قیمت‌ها به کانال
+# ارسال یک پیام قیمت
 # =========================
 
 @app.route("/send")
@@ -136,45 +130,27 @@ def send():
 
     message = f"""
 <b>╔══════════════════════╗</b>
-<b>          MIRZA</b>
+<b>           📊 MIRZA</b>
 <b>╚══════════════════════╝</b>
 
-📊 <b>آخرین وضعیت بازار</b>
-
-━━━━━━━━━━━━━━━━━━
-
 🟡 <b>طلای ۱۸ عیار</b>
-💰 <b>{gold}</b>
-{change_icon(gold_change)} تغییر: <b>{gold_change}%</b>
-
-━━━━━━━━━━━━━━━━━━
+💰 <b>{gold}</b>    {change_icon(gold_change)} <b>{gold_change}%</b>
 
 🪙 <b>سکه امامی</b>
-💰 <b>{coin}</b>
-{change_icon(coin_change)} تغییر: <b>{coin_change}%</b>
-
-━━━━━━━━━━━━━━━━━━
+💰 <b>{coin}</b>    {change_icon(coin_change)} <b>{coin_change}%</b>
 
 💵 <b>دلار</b>
-💰 <b>{dollar}</b>
-{change_icon(dollar_change)} تغییر: <b>{dollar_change}%</b>
-
-━━━━━━━━━━━━━━━━━━
+💰 <b>{dollar}</b>    {change_icon(dollar_change)} <b>{dollar_change}%</b>
 
 💶 <b>یورو</b>
-💰 <b>{euro}</b>
-{change_icon(euro_change)} تغییر: <b>{euro_change}%</b>
-
-━━━━━━━━━━━━━━━━━━
+💰 <b>{euro}</b>    {change_icon(euro_change)} <b>{euro_change}%</b>
 
 ₿ <b>بیت‌کوین</b>
-💰 <b>{bitcoin}</b>
-{change_icon(bitcoin_change)} تغییر: <b>{bitcoin_change}%</b>
+💰 <b>{bitcoin}</b>    {change_icon(bitcoin_change)} <b>{bitcoin_change}%</b>
 
-━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━
 
-🔄 <i>منبع قیمت‌ها: TGJU</i>
-🤖 <b>Mirza</b>
+🔄 <i>آخرین بروزرسانی از TGJU</i>
 """
 
     send_message(message)
@@ -193,7 +169,7 @@ def prices():
 
 
 # =========================
-# اجرای برنامه
+# اجرای محلی
 # =========================
 
 if __name__ == "__main__":
@@ -203,4 +179,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-        )
+    )
