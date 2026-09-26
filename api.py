@@ -1,59 +1,48 @@
 import os
+import re
 import requests
 from flask import Flask
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
+TGJU_URL = "https://www.tgju.org/widget/get/market-data"
+
 
 def get_prices():
-    url = "https://www.tgju.org/widget/get/market-data"
-
     response = requests.get(
-        url,
+        TGJU_URL,
         headers={
             "User-Agent": "Mozilla/5.0"
         },
-        timeout=15
+        timeout=20
     )
 
     response.raise_for_status()
+    html = response.text
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    # استخراج اطلاعات بازار از متن صفحه
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text)
 
-    prices = {
-        "gold": "نامشخص",
-        "coin": "نامشخص",
-        "dollar": "نامشخص",
-        "euro": "نامشخص",
-        "bitcoin": "نامشخص"
+    def find_price(name):
+        pattern = rf"{name}\s+([\d,]+)\s*\(([-\d.]+)%\)"
+        match = re.search(pattern, text)
+
+        if match:
+            return match.group(1), match.group(2)
+
+        return "نامشخص", "نامشخص"
+
+    return {
+        "gold18": find_price("طلا ۱۸"),
+        "coin": find_price("سکه"),
+        "dollar": find_price("دلار"),
+        "euro": find_price("یورو"),
+        "bitcoin": find_price("بیت کوین")
     }
-
-    # پیدا کردن قیمت‌ها از جدول/ویجت
-    rows = soup.find_all("tr")
-
-    for row in rows:
-        text = row.get_text(" ", strip=True)
-
-        if "طلای 18" in text or "طلای ۱۸" in text:
-            prices["gold"] = text
-
-        elif "سکه امامی" in text:
-            prices["coin"] = text
-
-        elif "دلار" in text:
-            prices["dollar"] = text
-
-        elif "یورو" in text:
-            prices["euro"] = text
-
-        elif "بیت کوین" in text or "بیت‌کوین" in text:
-            prices["bitcoin"] = text
-
-    return prices
 
 
 def send_message(text):
@@ -65,7 +54,7 @@ def send_message(text):
             "chat_id": CHAT_ID,
             "text": text
         },
-        timeout=15
+        timeout=20
     )
 
     response.raise_for_status()
@@ -78,20 +67,39 @@ def home():
 
 @app.route("/send")
 def send():
-
     prices = get_prices()
 
-    message = f"""📊 Mirza Market
+    gold, gold_change = prices["gold18"]
+    coin, coin_change = prices["coin"]
+    dollar, dollar_change = prices["dollar"]
+    euro, euro_change = prices["euro"]
+    bitcoin, bitcoin_change = prices["bitcoin"]
 
-🟡 طلای ۱۸ عیار: {prices["gold"]}
-🪙 سکه امامی: {prices["coin"]}
-💵 دلار: {prices["dollar"]}
-💶 یورو: {prices["euro"]}
-₿ بیت‌کوین: {prices["bitcoin"]}
+    message = f"""📊 <b>Mirza Market</b>
 
-🔄 آخرین بروزرسانی از TGJU
+🟡 <b>طلای ۱۸ عیار:</b> {gold}
+📈 تغییر: {gold_change}٪
+
+🪙 <b>سکه امامی:</b> {coin}
+📈 تغییر: {coin_change}٪
+
+💵 <b>دلار:</b> {dollar}
+📈 تغییر: {dollar_change}٪
+
+💶 <b>یورو:</b> {euro}
+📈 تغییر: {euro_change}٪
+
+₿ <b>بیت‌کوین:</b> {bitcoin}
+📈 تغییر: {bitcoin_change}٪
+
+🔄 بروزرسانی از TGJU
 """
 
     send_message(message)
 
-    return "Message sent!"
+    return "Message sent successfully!"
+
+
+@app.route("/prices")
+def prices():
+    return get_prices()
