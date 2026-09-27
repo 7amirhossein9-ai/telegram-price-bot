@@ -1,5 +1,2 @@
-Flask
 requests
 beautifulsoup4
-python-dotenv
-tzdata
