@@ -405,7 +405,10 @@ def send_telegram(message):
         "disable_web_page_preview": True,
     }
 
-    response = requests.post(url, data=payload, timeout=20)
+    # json= (not data=) guarantees the body is sent as UTF-8 -- form
+    # encoding (data=) left the charset ambiguous and was corrupting
+    # Persian/emoji text (mojibake) on the Telegram side.
+    response = requests.post(url, json=payload, timeout=20)
     response.raise_for_status()
 
 
