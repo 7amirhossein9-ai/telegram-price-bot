@@ -101,6 +101,27 @@ def format_percent(value):
     return f"🔴 {value:.2f}%"
 
 
+def _display_width(text):
+    """Character count for padding purposes, ignoring the zero-width
+    joiner (ZWNJ, used in Persian half-spaces like 'آب‌شده') which takes
+    no visual space but would otherwise throw off alignment."""
+    return len(text.replace("\u200c", ""))
+
+
+def pad_label(label, width=18):
+    """Right-pad a Persian label with spaces so columns line up when the
+    whole row is rendered in a monospace (<pre>) block."""
+    return label + " " * max(1, width - _display_width(label))
+
+
+def row(label, value_str, percent=None, label_width=18, value_width=14):
+    """One aligned row: label, right-justified value, then percent (or an
+    em-dash placeholder if there's no percent for this row)."""
+    value_col = value_str.rjust(value_width)
+    return f"{pad_label(label, label_width)}{value_col}  {format_percent(percent)}"
+
+
+
 def format_plain_percent(value, decimals=1):
     """For a plain static percentage (e.g. BTC dominance), not a change
     value -- no color, no +/- sign."""
@@ -481,48 +502,50 @@ def run_market_update():
     def crypto_line(symbol, label):
         c = crypto.get(symbol)
         if not c or c.get("price") is None:
-            return f"{label}    <b>-</b>"
-        return (
-            f"{label}    <b>${format_price(c['price'], 2 if c['price'] < 10 else 0)}</b>\n"
-            f"      1h: {format_percent(c.get('change_1h'))}   "
-            f"24h: {format_percent(c.get('change_24h'))}"
+            return pad_label(label, 12) + "-"
+        price_str = f"${format_price(c['price'], 2 if c['price'] < 10 else 0)}"
+        line1 = f"{pad_label(label, 12)}{price_str.rjust(12)}"
+        line2 = (
+            f"{'':12}1h:{format_percent(c.get('change_1h')).rjust(11)}   "
+            f"24h:{format_percent(c.get('change_24h')).rjust(11)}"
         )
+        return line1 + "\n" + line2
 
     message = f"""
 📊 <b>MIRZA | MARKET UPDATE</b>
 
 🥇 <b>طلا</b>
-طلای ۱۸ عیار     <b>{format_price(gold18 / 10 if gold18 else None)}</b> تومان   {format_percent(gold18_change)}
-طلای آب‌شده      <b>{format_price(gold_melted / 10 if gold_melted else None)}</b> تومان   {format_percent(gold_melted_change)}
-اونس جهانی       <b>${format_price(gold_ounce, 2)}</b>   {format_percent(gold_ounce_change)}
+<pre>{row("طلای ۱۸ عیار", format_price(gold18 / 10 if gold18 else None) + " ت", gold18_change)}
+{row("طلای آب‌شده", format_price(gold_melted / 10 if gold_melted else None) + " ت", gold_melted_change)}
+{row("اونس جهانی", "$" + format_price(gold_ounce, 2), gold_ounce_change)}</pre>
 
 💵 <b>ارز</b>
-دلار آزاد        <b>{format_price(usd / 10 if usd else None)}</b> تومان   {format_percent(usd_change)}
-یورو             <b>{format_price(eur / 10 if eur else None)}</b> تومان   {format_percent(eur_change)}
-تتر              <b>{format_price(usdt / 10 if usdt else None)}</b> تومان   {format_percent(usdt_change)}
+<pre>{row("دلار آزاد", format_price(usd / 10 if usd else None) + " ت", usd_change)}
+{row("یورو", format_price(eur / 10 if eur else None) + " ت", eur_change)}
+{row("تتر", format_price(usdt / 10 if usdt else None) + " ت", usdt_change)}</pre>
 
 ₿ <b>ارزهای دیجیتال</b>
-{crypto_line("BTC", "بیت‌کوین")}
+<pre>{crypto_line("BTC", "بیت‌کوین")}
 {crypto_line("ETH", "اتریوم")}
 {crypto_line("WLD", "ورلدکوین")}
-{crypto_line("SUI", "سوی")}
+{crypto_line("SUI", "سوی")}</pre>
 
 🌐 <b>شاخص‌های جهانی</b>
-BTC Dominance    <b>{format_plain_percent(crypto_global.get("btc_dominance"))}</b>
-Market Cap کل    <b>{format_large_usd(crypto_global.get("total_market_cap_usd"))}</b>
-Fear & Greed     <b>{fear_greed["value"] if fear_greed["value"] is not None else "-"}</b> — {fear_greed["classification"] or "-"}
-شاخص دلار (DXY)  <b>{format_price(dxy_price, 2)}</b>   {format_percent(dxy_change)}
+<pre>{pad_label("BTC Dominance", 18)}{format_plain_percent(crypto_global.get("btc_dominance")).rjust(14)}
+{pad_label("Market Cap کل", 18)}{format_large_usd(crypto_global.get("total_market_cap_usd")).rjust(14)}
+{pad_label("Fear & Greed", 18)}{(str(fear_greed["value"]) + " - " + (fear_greed["classification"] or "-") if fear_greed["value"] is not None else "-").rjust(14)}
+{row("شاخص دلار DXY", format_price(dxy_price, 2), dxy_change)}</pre>
 
 🛢 <b>نفت و کالا</b>
-نفت برنت         <b>${format_price(brent_price, 2)}</b>   {format_percent(brent_change)}
-نفت WTI          <b>${format_price(wti_price, 2)}</b>   {format_percent(wti_change)}
-نقره             <b>${format_price(silver_price, 2)}</b>   {format_percent(silver_change)}
+<pre>{row("نفت برنت", "$" + format_price(brent_price, 2), brent_change)}
+{row("نفت WTI", "$" + format_price(wti_price, 2), wti_change)}
+{row("نقره", "$" + format_price(silver_price, 2), silver_change)}</pre>
 
 📈 <b>بورس ایران</b>
-شاخص کل          <b>{format_price(tse_index, 2)}</b>   {format_percent(tse_index_change)}
-شاخص هم‌وزن       <b>{format_price(tse_hamvazn, 2)}</b>   {format_percent(tse_hamvazn_change)}
-ارزش معاملات      <b>{format_price(tse_trade_value)}</b>
-ورود/خروج پول حقیقی <b>{format_price(tse_real_money_flow)}</b>
+<pre>{row("شاخص کل", format_price(tse_index, 2), tse_index_change)}
+{row("شاخص هم‌وزن", format_price(tse_hamvazn, 2), tse_hamvazn_change)}
+{pad_label("ارزش معاملات", 18)}{format_price(tse_trade_value).rjust(14)}
+{pad_label("ورود/خروج پول", 18)}{format_price(tse_real_money_flow).rjust(14)}</pre>
 
 🕐 {now.strftime("%H:%M")} — {now.strftime("%Y-%m-%d")}
 
