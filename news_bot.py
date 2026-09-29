@@ -3,12 +3,11 @@ import re
 import html
 import requests
 import xml.etree.ElementTree as ET
-from datetime import datetime
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# RSS feeds
 RSS_FEEDS = {
     "بازار و اقتصاد": "https://www.investing.com/rss/121899.rss",
     "کالا و طلا": "https://www.investing.com/rss/commodities.rss",
@@ -32,21 +31,30 @@ def clean_text(text):
 
 
 def load_sent_news():
+
     if not os.path.exists(SENT_FILE):
         return set()
 
     with open(SENT_FILE, "r", encoding="utf-8") as file:
-        return set(line.strip() for line in file if line.strip())
+        return set(
+            line.strip()
+            for line in file
+            if line.strip()
+        )
 
 
 def save_sent_news(sent):
+
     with open(SENT_FILE, "w", encoding="utf-8") as file:
+
         for item in sent:
             file.write(item + "\n")
 
 
 def get_news(feed_url, category):
+
     try:
+
         response = requests.get(
             feed_url,
             headers={
@@ -57,18 +65,38 @@ def get_news(feed_url, category):
 
         response.raise_for_status()
 
-        root = ET.fromstring(response.content)
+        root = ET.fromstring(
+            response.content
+        )
 
         news = []
 
         for item in root.findall(".//item"):
-            title = item.findtext("title", "")
-            link = item.findtext("link", "")
-            description = item.findtext("description", "")
-            pub_date = item.findtext("pubDate", "")
+
+            title = item.findtext(
+                "title",
+                ""
+            )
+
+            link = item.findtext(
+                "link",
+                ""
+            )
+
+            description = item.findtext(
+                "description",
+                ""
+            )
+
+            pub_date = item.findtext(
+                "pubDate",
+                ""
+            )
 
             title = clean_text(title)
-            description = clean_text(description)
+            description = clean_text(
+                description
+            )
 
             if not title or not link:
                 continue
@@ -84,76 +112,89 @@ def get_news(feed_url, category):
         return news
 
     except Exception as error:
-        print(f"RSS error: {error}")
+
+        print(
+            f"RSS error: {error}"
+        )
+
         return []
 
 
-def create_analysis(news):
-    title = news["title"]
-    description = news["description"]
+def ask_ai(news):
 
-    text = (title + " " + description).lower()
+    prompt = f"""
+تو یک تحلیلگر بازار مالی برای کانال تلگرامی Mirza هستی.
 
-    analysis = ""
+خبر زیر را بررسی کن.
 
-    if any(word in text for word in [
-        "gold",
-        "bullion",
-        "gold prices"
-    ]):
-        analysis = (
-            "تحلیل میرزا: این خبر مستقیماً با بازار طلا ارتباط دارد. "
-            "برای ارزیابی اثر آن باید مسیر دلار، نرخ بهره و بازده اوراق "
-            "خزانه آمریکا نیز در کنار خبر بررسی شود."
-        )
+عنوان:
+{news["title"]}
 
-    elif any(word in text for word in [
-        "bitcoin",
-        "ethereum",
-        "crypto",
-        "cryptocurrency"
-    ]):
-        analysis = (
-            "تحلیل میرزا: این خبر می‌تواند روی بازار رمزارزها اثرگذار باشد. "
-            "برای ارزیابی شدت اثر، باید واکنش قیمت، حجم معاملات و وضعیت "
-            "روند کلی بازار نیز بررسی شود."
-        )
+متن خبر:
+{news["description"]}
 
-    elif any(word in text for word in [
-        "fed",
-        "federal reserve",
-        "interest rate",
-        "inflation"
-    ]):
-        analysis = (
-            "تحلیل میرزا: اخبار مربوط به سیاست پولی آمریکا معمولاً "
-            "از عوامل مهم اثرگذار بر دلار، طلا، سهام و رمزارزها هستند. "
-            "جهت اثرگذاری به برداشت بازار از مسیر نرخ بهره بستگی دارد."
-        )
+خروجی را فقط به زبان فارسی تولید کن.
 
-    elif any(word in text for word in [
-        "oil",
-        "crude",
-        "brent",
-        "wti"
-    ]):
-        analysis = (
-            "تحلیل میرزا: این خبر به بازار انرژی مربوط است. "
-            "اثر آن می‌تواند از مسیر قیمت نفت، تورم و انتظارات اقتصادی "
-            "به سایر بازارهای مالی منتقل شود."
-        )
+خروجی شامل این بخش‌ها باشد:
 
-    else:
-        analysis = (
-            "تحلیل میرزا: اهمیت این خبر باید با توجه به واکنش بازار "
-            "و ارتباط آن با نرخ بهره، دلار، تورم و جریان نقدینگی بررسی شود."
-        )
+1. خلاصه خبر
+در 2 تا 3 جمله توضیح بده خبر درباره چیست.
 
-    return analysis
+2. تحلیل بازار
+توضیح بده این خبر ممکن است روی کدام بازارها اثر بگذارد:
+طلا، دلار، نفت، بورس یا رمزارزها.
+
+3. جهت احتمالی اثر
+اگر شواهد کافی وجود دارد بگو:
+مثبت
+منفی
+خنثی
+یا نامشخص
+
+اگر اطلاعات کافی برای تعیین جهت وجود ندارد، صریحاً بگو «نامشخص».
+
+4. نکته مهم
+یک نکته کوتاه درباره چیزی که معامله‌گران باید برای ارزیابی اثر واقعی خبر زیر نظر داشته باشند.
+
+هیچ اطلاعاتی را که در خبر وجود ندارد به عنوان واقعیت اضافه نکن.
+
+تحلیل قطعی یا توصیه خرید و فروش ارائه نده.
+
+مختصر و مناسب انتشار در تلگرام بنویس.
+"""
+
+    url = "https://api.openai.com/v1/responses"
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "gpt-5.6-luna",
+        "input": prompt
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=data,
+        timeout=60
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    return result["output"][0]["content"][0]["text"]
 
 
 def send_to_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
+    )
 
     data = {
         "chat_id": CHAT_ID,
@@ -173,9 +214,19 @@ def send_to_telegram(message):
 
 def main():
 
-    if not BOT_TOKEN or not CHAT_ID:
+    if not BOT_TOKEN:
         raise Exception(
-            "BOT_TOKEN or CHAT_ID is missing."
+            "BOT_TOKEN is missing."
+        )
+
+    if not CHAT_ID:
+        raise Exception(
+            "CHAT_ID is missing."
+        )
+
+    if not OPENAI_API_KEY:
+        raise Exception(
+            "OPENAI_API_KEY is missing."
         )
 
     sent_news = load_sent_news()
@@ -191,9 +242,6 @@ def main():
 
         all_news.extend(news)
 
-    # جدیدترین خبرها
-    all_news = all_news[:30]
-
     published_count = 0
 
     for news in all_news:
@@ -203,9 +251,11 @@ def main():
         if news_id in sent_news:
             continue
 
-        analysis = create_analysis(news)
+        try:
 
-        message = f"""
+            ai_text = ask_ai(news)
+
+            message = f"""
 <b>📰 خبر جدید بازار</b>
 
 <b>{html.escape(news["title"])}</b>
@@ -215,31 +265,26 @@ def main():
 
 ━━━━━━━━━━━━━━
 
-{html.escape(news["description"])}
+<b>🤖 خلاصه و تحلیل میرزا</b>
+
+{html.escape(ai_text)}
 
 ━━━━━━━━━━━━━━
 
-<b>🔎 تحلیل میرزا</b>
-
-{html.escape(analysis)}
-
-━━━━━━━━━━━━━━
-
-🔗 <a href="{html.escape(news["link"])}">مشاهده منبع اصلی</a>
+🔗 <a href="{html.escape(news["link"])}">منبع اصلی خبر</a>
 
 #میرزا #بازار #تحلیل
 """
 
-        try:
             send_to_telegram(message)
-
-            print(
-                f"Published: {news['title']}"
-            )
 
             sent_news.add(news_id)
 
             published_count += 1
+
+            print(
+                f"Published: {news['title']}"
+            )
 
             if published_count >= MAX_NEWS_PER_RUN:
                 break
@@ -247,7 +292,7 @@ def main():
         except Exception as error:
 
             print(
-                f"Telegram error: {error}"
+                f"Processing error: {error}"
             )
 
     save_sent_news(sent_news)
