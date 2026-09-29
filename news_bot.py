@@ -1,6 +1,7 @@
 import os
-import time
 import re
+import json
+import time
 import hashlib
 import requests
 import xml.etree.ElementTree as ET
@@ -13,7 +14,7 @@ from email.utils import parsedate_to_datetime
 # SETTINGS
 # =========================================================
 
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 MAX_CANDIDATES = 10
 
@@ -180,7 +181,7 @@ SOURCE_SCORE = {
 
 
 # =========================================================
-# BASIC CHECK
+# CHECK ENVIRONMENT
 # =========================================================
 
 def check_environment():
@@ -197,7 +198,9 @@ def check_environment():
         missing.append("GEMINI_API_KEY")
 
     if missing:
+
         print("Missing environment variables:")
+
         for item in missing:
             print("-", item)
 
@@ -207,7 +210,7 @@ def check_environment():
 
 
 # =========================================================
-# SENT NEWS
+# LOAD SENT NEWS
 # =========================================================
 
 def load_sent_news():
@@ -231,10 +234,17 @@ def load_sent_news():
 
     except Exception as e:
 
-        print("Error loading sent news:", e)
+        print(
+            "Error loading sent news:",
+            e
+        )
 
         return set()
 
+
+# =========================================================
+# SAVE SENT NEWS
+# =========================================================
 
 def save_sent_news(sent_news):
 
@@ -247,20 +257,31 @@ def save_sent_news(sent_news):
         ) as file:
 
             for item in sorted(sent_news):
-                file.write(item + "\n")
+
+                file.write(
+                    item + "\n"
+                )
 
     except Exception as e:
 
-        print("Error saving sent news:", e)
+        print(
+            "Error saving sent news:",
+            e
+        )
 
 
 # =========================================================
-# NEWS ID
+# CREATE NEWS ID
 # =========================================================
 
-def create_news_id(title, link):
+def create_news_id(
+    title,
+    link
+):
 
-    raw = f"{title}|{link}"
+    raw = (
+        f"{title}|{link}"
+    )
 
     return hashlib.sha256(
         raw.encode("utf-8")
@@ -268,16 +289,24 @@ def create_news_id(title, link):
 
 
 # =========================================================
-# GOOGLE NEWS RSS
+# GOOGLE NEWS RSS URL
 # =========================================================
 
 def get_rss_url(domain):
 
-    query = f"when:2h site:{domain}"
+    query = (
+        f"when:2h site:{domain}"
+    )
+
+    encoded_query = (
+        requests.utils.quote(
+            query
+        )
+    )
 
     return (
         "https://news.google.com/rss/search?"
-        f"q={requests.utils.quote(query)}"
+        f"q={encoded_query}"
         "&hl=en-US"
         "&gl=US"
         "&ceid=US:en"
@@ -303,10 +332,13 @@ def clean_title(title):
 
 
 # =========================================================
-# INVALID NEWS FILTER
+# VALID NEWS FILTER
 # =========================================================
 
-def is_valid_news(title, link):
+def is_valid_news(
+    title,
+    link
+):
 
     if not title:
         return False
@@ -317,13 +349,14 @@ def is_valid_news(title, link):
     if not link:
         return False
 
-    lower_title = title.lower()
+    lower_title = (
+        title.lower()
+    )
 
     bad_patterns = [
         "print edition",
         "wall street journal - wsj",
-        " - coindesk",
-        " - wsj",
+        "- coindesk",
     ]
 
     for pattern in bad_patterns:
@@ -341,9 +374,14 @@ def is_valid_news(title, link):
 # PARSE RSS
 # =========================================================
 
-def parse_rss(source_name, domain):
+def parse_rss(
+    source_name,
+    domain
+):
 
-    url = get_rss_url(domain)
+    url = get_rss_url(
+        domain
+    )
 
     try:
 
@@ -374,12 +412,27 @@ def parse_rss(source_name, domain):
 
     articles = []
 
-    for item in root.findall(".//item")[:8]:
+    items = root.findall(
+        ".//item"
+    )
 
-        title_element = item.find("title")
-        link_element = item.find("link")
-        date_element = item.find("pubDate")
-        source_element = item.find("source")
+    for item in items[:8]:
+
+        title_element = (
+            item.find("title")
+        )
+
+        link_element = (
+            item.find("link")
+        )
+
+        date_element = (
+            item.find("pubDate")
+        )
+
+        source_element = (
+            item.find("source")
+        )
 
         title = (
             title_element.text
@@ -402,12 +455,21 @@ def parse_rss(source_name, domain):
         rss_source = source_name
 
         if source_element is not None:
+
             if source_element.text:
-                rss_source = source_element.text.strip()
 
-        title = clean_title(title)
+                rss_source = (
+                    source_element.text.strip()
+                )
 
-        if not is_valid_news(title, link):
+        title = clean_title(
+            title
+        )
+
+        if not is_valid_news(
+            title,
+            link
+        ):
             continue
 
         published = None
@@ -416,35 +478,48 @@ def parse_rss(source_name, domain):
 
             try:
 
-                published = parsedate_to_datetime(
-                    pub_date
+                published = (
+                    parsedate_to_datetime(
+                        pub_date
+                    )
                 )
 
                 if published.tzinfo is None:
-                    published = published.replace(
-                        tzinfo=timezone.utc
+
+                    published = (
+                        published.replace(
+                            tzinfo=timezone.utc
+                        )
                     )
 
             except Exception:
+
                 published = None
 
         articles.append({
+
             "id": create_news_id(
                 title,
                 link
             ),
+
             "title": title,
+
             "link": link,
+
             "source": source_name,
+
             "rss_source": rss_source,
+
             "published": published,
+
         })
 
     return articles
 
 
 # =========================================================
-# COLLECT ALL NEWS
+# COLLECT NEWS
 # =========================================================
 
 def collect_news():
@@ -462,16 +537,20 @@ def collect_news():
             domain
         )
 
-        all_news.extend(news)
+        all_news.extend(
+            news
+        )
 
     return all_news
 
 
 # =========================================================
-# EXACT DUPLICATE REMOVAL
+# REMOVE DUPLICATES
 # =========================================================
 
-def remove_duplicates(news):
+def remove_duplicates(
+    news
+):
 
     seen = set()
 
@@ -479,14 +558,20 @@ def remove_duplicates(news):
 
     for article in news:
 
-        if article["id"] in seen:
-            continue
-
-        seen.add(
+        article_id = (
             article["id"]
         )
 
-        result.append(article)
+        if article_id in seen:
+            continue
+
+        seen.add(
+            article_id
+        )
+
+        result.append(
+            article
+        )
 
     return result
 
@@ -495,7 +580,9 @@ def remove_duplicates(news):
 # KEYWORD SCORE
 # =========================================================
 
-def keyword_score(title):
+def keyword_score(
+    title
+):
 
     text = title.lower()
 
@@ -503,17 +590,16 @@ def keyword_score(title):
 
     for category, words in KEYWORDS.items():
 
-        category_found = False
+        found = False
 
         for word in words:
 
             if word.lower() in text:
 
-                category_found = True
-
+                found = True
                 break
 
-        if category_found:
+        if found:
 
             if category in [
                 "economy",
@@ -530,14 +616,19 @@ def keyword_score(title):
 
                 score += 3
 
-    return min(score, 30)
+    return min(
+        score,
+        30
+    )
 
 
 # =========================================================
 # RECENCY SCORE
 # =========================================================
 
-def recency_score(published):
+def recency_score(
+    published
+):
 
     if not published:
         return 5
@@ -569,10 +660,12 @@ def recency_score(published):
 
 
 # =========================================================
-# TITLE SIMILARITY
+# TITLE WORDS
 # =========================================================
 
-def title_words(title):
+def title_words(
+    title
+):
 
     words = re.findall(
         r"[a-zA-Z0-9]+",
@@ -580,6 +673,7 @@ def title_words(title):
     )
 
     stop_words = {
+
         "the",
         "a",
         "an",
@@ -597,6 +691,7 @@ def title_words(title):
         "at",
         "after",
         "before",
+
     }
 
     return {
@@ -606,10 +701,22 @@ def title_words(title):
     }
 
 
-def similarity(title1, title2):
+# =========================================================
+# TITLE SIMILARITY
+# =========================================================
 
-    words1 = title_words(title1)
-    words2 = title_words(title2)
+def similarity(
+    title1,
+    title2
+):
+
+    words1 = title_words(
+        title1
+    )
+
+    words2 = title_words(
+        title2
+    )
 
     if not words1 or not words2:
         return 0
@@ -622,25 +729,35 @@ def similarity(title1, title2):
         words1 | words2
     )
 
-    return intersection / union
+    return (
+        intersection / union
+    )
 
 
 # =========================================================
-# CROSS SOURCE TREND
+# CROSS SOURCE SCORE
 # =========================================================
 
-def calculate_cross_source_scores(news):
+def calculate_cross_source_scores(
+    news
+):
 
     scores = {
         article["id"]: 0
         for article in news
     }
 
-    for i in range(len(news)):
+    for i in range(
+        len(news)
+    ):
 
-        for j in range(i + 1, len(news)):
+        for j in range(
+            i + 1,
+            len(news)
+        ):
 
             article1 = news[i]
+
             article2 = news[j]
 
             if (
@@ -679,10 +796,12 @@ def calculate_cross_source_scores(news):
 
 
 # =========================================================
-# FINAL SCORE
+# SCORE ALL NEWS
 # =========================================================
 
-def score_news(news):
+def score_news(
+    news
+):
 
     cross_scores = (
         calculate_cross_source_scores(
@@ -692,44 +811,48 @@ def score_news(news):
 
     for article in news:
 
-        source = article["source"]
+        source = article[
+            "source"
+        ]
 
-        source_score = SOURCE_SCORE.get(
+        article[
+            "keyword_score"
+        ] = keyword_score(
+            article["title"]
+        )
+
+        article[
+            "recency_score"
+        ] = recency_score(
+            article["published"]
+        )
+
+        article[
+            "source_score"
+        ] = SOURCE_SCORE.get(
             source,
             10
         )
 
-        article["keyword_score"] = (
-            keyword_score(
-                article["title"]
-            )
+        article[
+            "cross_source_score"
+        ] = cross_scores.get(
+            article["id"],
+            0
         )
 
-        article["recency_score"] = (
-            recency_score(
-                article["published"]
-            )
-        )
+        article[
+            "score"
+        ] = (
 
-        article["source_score"] = (
-            source_score
-        )
-
-        article["cross_source_score"] = (
-            cross_scores.get(
-                article["id"],
-                0
-            )
-        )
-
-        article["score"] = (
             article["keyword_score"]
-            +
-            article["recency_score"]
-            +
-            article["source_score"]
-            +
-            article["cross_source_score"]
+
+            + article["recency_score"]
+
+            + article["source_score"]
+
+            + article["cross_source_score"]
+
         )
 
     return sorted(
@@ -786,7 +909,7 @@ def prepare_candidates(
 
 
 # =========================================================
-# GEMINI
+# GEMINI ANALYSIS
 # =========================================================
 
 def analyze_with_gemini(
@@ -816,7 +939,7 @@ def analyze_with_gemini(
 لینک:
 {article["link"]}
 
-امتیاز داخلی:
+امتیاز:
 {article["score"]}
 """
         )
@@ -828,54 +951,66 @@ def analyze_with_gemini(
     prompt = f"""
 تو تحلیلگر اخبار اقتصادی و بازارهای مالی برای کانال تلگرامی «میرزا» هستی.
 
-از بین خبرهای زیر فقط مهم‌ترین خبری را انتخاب کن.
+از بین خبرهای زیر فقط مهم‌ترین خبر را انتخاب کن.
 
-معیار انتخاب:
+معیارها:
 
-1. اهمیت اقتصادی
-2. تأثیر احتمالی بر بازارهای مالی
-3. تأثیر بر طلا
-4. تأثیر بر بیت‌کوین و رمزارزها
-5. تأثیر بر سهام و شرکت‌ها
-6. تأثیر بر دلار و ارزها
-7. تأثیر بر نفت و کالاها
-8. خبرهای بانک‌های مرکزی، نرخ بهره و تورم
-9. خبرهای سیاسی فقط در صورتی که اثر اقتصادی یا بازاری داشته باشند
-10. خبری که در چند منبع مختلف دیده شده اهمیت بیشتری دارد.
+- اهمیت اقتصادی
+- اثر احتمالی بر بازارهای مالی
+- طلا
+- بیت‌کوین
+- اتریوم
+- سهام
+- دلار
+- نفت
+- نرخ بهره
+- تورم
+- بانک‌های مرکزی
+- تجارت جهانی
+- تحریم‌ها و تعرفه‌ها
+- رویدادهای سیاسی فقط در صورتی که اثر اقتصادی داشته باشند
 
-اگر هیچ‌کدام واقعاً مهم نیستند، selected_index را برابر 0 قرار بده.
+اگر چند منبع درباره یک اتفاق مشابه خبر داده‌اند،
+این موضوع را نشانه اهمیت بیشتر در نظر بگیر.
+
+اگر هیچ خبر واقعاً مهمی وجود ندارد:
+
+selected_index = 0
 
 اگر خبر مهم وجود دارد:
 
-یک تحلیل کوتاه فارسی بنویس.
+selected_index را شماره همان خبر قرار بده.
 
-متن باید:
+سپس یک تحلیل فارسی کوتاه بنویس.
 
-- فارسی باشد.
-- ساده و قابل فهم باشد.
-- حدود 150 تا 250 کلمه باشد.
-- خبر را خلاصه کند.
-- توضیح دهد چرا این خبر مهم است.
-- اثر احتمالی آن بر بازار را توضیح دهد.
-- درباره طلا، دلار، بیت‌کوین، اتریوم، سهام یا نفت فقط در صورت ارتباط صحبت کند.
-- توصیه خرید یا فروش ندهد.
-- پیش‌بینی قطعی نکند.
-- درباره افراد و سیاستمداران قضاوت سیاسی نکند.
-- اگر خبر سیاسی است فقط اثر اقتصادی و بازاری آن را بررسی کند.
-- منبع خبر را در انتهای متن ذکر کند.
+قوانین متن:
 
-خروجی فقط JSON معتبر باشد:
+- فارسی روان
+- حدود 150 تا 250 کلمه
+- ابتدا توضیح خبر
+- سپس اهمیت خبر
+- سپس اثر احتمالی بر بازار
+- بدون توصیه خرید یا فروش
+- بدون پیش‌بینی قطعی
+- بدون قضاوت سیاسی
+- درباره سیاستمداران فقط واقعیت و اثر اقتصادی را بیان کن
+- منبع را در پایان ذکر کن
+- اگر خبر مربوط به یک شرکت است، نام شرکت و در صورت وجود نماد بورسی آن را ذکر کن
+
+فقط JSON معتبر برگردان.
+
+فرمت:
 
 {{
-  "selected_index": 0,
-  "message": ""
+    "selected_index": 0,
+    "message": ""
 }}
 
 یا:
 
 {{
-  "selected_index": 3,
-  "message": "متن کامل تحلیل"
+    "selected_index": 3,
+    "message": "متن تحلیل"
 }}
 
 خبرها:
@@ -885,19 +1020,24 @@ def analyze_with_gemini(
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{GEMINI_MODEL}:generateContent"
+        f"v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
     )
 
     payload = {
 
         "contents": [
+
             {
                 "parts": [
+
                     {
                         "text": prompt
                     }
+
                 ]
             }
+
         ],
 
         "generationConfig": {
@@ -909,9 +1049,14 @@ def analyze_with_gemini(
                 1000,
 
             "thinkingConfig": {
-                "thinkingLevel": "low"
+
+                "thinkingLevel":
+                    "low"
+
             }
+
         }
+
     }
 
     headers = {
@@ -921,16 +1066,10 @@ def analyze_with_gemini(
 
         "x-goog-api-key":
             GEMINI_API_KEY
+
     }
 
-    max_retries = 4
-
-    delays = [
-        15,
-        30,
-        60,
-        90
-    ]
+    max_retries = 3
 
     for attempt in range(
         max_retries
@@ -940,20 +1079,30 @@ def analyze_with_gemini(
 
             print(
                 f"Gemini attempt "
-                f"{attempt + 1}/{max_retries}"
+                f"{attempt + 1}/"
+                f"{max_retries}"
             )
 
             response = requests.post(
+
                 url,
+
                 headers=headers,
+
                 json=payload,
+
                 timeout=90
+
             )
 
             print(
                 "Gemini status:",
                 response.status_code
             )
+
+            # -------------------------------------------------
+            # SUCCESS
+            # -------------------------------------------------
 
             if response.status_code == 200:
 
@@ -965,13 +1114,9 @@ def analyze_with_gemini(
                     ["text"]
                 )
 
-                print(
-                    "Gemini response received."
-                )
-
-                # Remove possible markdown fences
                 text = text.strip()
 
+                # Remove markdown JSON fences
                 text = re.sub(
                     r"^```json",
                     "",
@@ -993,17 +1138,49 @@ def analyze_with_gemini(
 
                 text = text.strip()
 
-                import json
-
                 result = json.loads(
                     text
                 )
 
                 return result
 
-            # Temporary errors
+            # -------------------------------------------------
+            # QUOTA ERROR
+            # -------------------------------------------------
+
+            if response.status_code == 429:
+
+                print(
+                    "Gemini quota exceeded."
+                )
+
+                try:
+
+                    error_data = (
+                        response.json()
+                    )
+
+                    print(
+                        error_data
+                    )
+
+                except Exception:
+
+                    print(
+                        response.text[:1000]
+                    )
+
+                print(
+                    "No more retry attempts."
+                )
+
+                return None
+
+            # -------------------------------------------------
+            # TEMPORARY SERVER ERROR
+            # -------------------------------------------------
+
             if response.status_code in [
-                429,
                 500,
                 502,
                 503,
@@ -1011,24 +1188,15 @@ def analyze_with_gemini(
             ]:
 
                 print(
-                    "Gemini temporary error:",
-                    response.status_code
+                    "Gemini temporary server error:"
+                    f" {response.status_code}"
                 )
-
-                try:
-
-                    print(
-                        response.text[:500]
-                    )
-
-                except Exception:
-                    pass
 
                 if attempt < max_retries - 1:
 
-                    wait_time = delays[
-                        attempt
-                    ]
+                    wait_time = (
+                        20 * (attempt + 1)
+                    )
 
                     print(
                         f"Retrying in "
@@ -1043,14 +1211,17 @@ def analyze_with_gemini(
 
                 return None
 
-            # Other errors
+            # -------------------------------------------------
+            # OTHER ERROR
+            # -------------------------------------------------
+
             print(
-                "Gemini API error:",
-                response.status_code
+                "Gemini API error:"
+                f" {response.status_code}"
             )
 
             print(
-                response.text[:1000]
+                response.text[:1500]
             )
 
             return None
@@ -1063,17 +1234,8 @@ def analyze_with_gemini(
 
             if attempt < max_retries - 1:
 
-                wait_time = delays[
-                    attempt
-                ]
-
-                print(
-                    f"Retrying in "
-                    f"{wait_time} seconds..."
-                )
-
                 time.sleep(
-                    wait_time
+                    20 * (attempt + 1)
                 )
 
             else:
@@ -1096,7 +1258,9 @@ def analyze_with_gemini(
 # TELEGRAM
 # =========================================================
 
-def send_telegram(message):
+def send_telegram(
+    message
+):
 
     url = (
         f"https://api.telegram.org/"
@@ -1110,14 +1274,19 @@ def send_telegram(message):
         "text": message,
 
         "disable_web_page_preview": False
+
     }
 
     try:
 
         response = requests.post(
+
             url,
+
             json=payload,
+
             timeout=30
+
         )
 
         if response.status_code == 200:
@@ -1134,7 +1303,7 @@ def send_telegram(message):
         )
 
         print(
-            response.text[:500]
+            response.text[:1000]
         )
 
         return False
@@ -1167,9 +1336,17 @@ def main():
         "================================"
     )
 
+    # -----------------------------------------------------
+    # CHECK ENVIRONMENT
+    # -----------------------------------------------------
+
     if not check_environment():
 
         return
+
+    # -----------------------------------------------------
+    # LOAD SENT NEWS
+    # -----------------------------------------------------
 
     sent_news = load_sent_news()
 
@@ -1179,7 +1356,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # COLLECT
+    # COLLECT NEWS
     # -----------------------------------------------------
 
     news = collect_news()
@@ -1198,7 +1375,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # REMOVE EXACT DUPLICATES
+    # REMOVE DUPLICATES
     # -----------------------------------------------------
 
     news = remove_duplicates(
@@ -1215,8 +1392,11 @@ def main():
     # -----------------------------------------------------
 
     candidates = prepare_candidates(
+
         news,
+
         sent_news
+
     )
 
     print(
@@ -1227,30 +1407,39 @@ def main():
     if not candidates:
 
         print(
-            "No new important candidates."
+            "No new candidates."
         )
 
         return
 
     # -----------------------------------------------------
-    # SHOW TOP CANDIDATES
+    # SHOW CANDIDATES
     # -----------------------------------------------------
 
     print()
+
     print(
         "Top candidates:"
     )
 
     for i, article in enumerate(
+
         candidates,
+
         start=1
+
     ):
 
         print(
+
             f"{i}. "
+
             f"[{article['score']}] "
+
             f"{article['source']} - "
+
             f"{article['title']}"
+
         )
 
     print()
@@ -1274,6 +1463,10 @@ def main():
         )
 
         return
+
+    # -----------------------------------------------------
+    # GET RESULT
+    # -----------------------------------------------------
 
     selected_index = result.get(
         "selected_index",
@@ -1339,7 +1532,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # SELECTED ARTICLE
+    # SELECT ARTICLE
     # -----------------------------------------------------
 
     selected_article = candidates[
@@ -1347,6 +1540,7 @@ def main():
     ]
 
     print()
+
     print(
         "Selected news:"
     )
@@ -1361,7 +1555,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # SEND TELEGRAM
+    # SEND TO TELEGRAM
     # -----------------------------------------------------
 
     success = send_telegram(
@@ -1377,7 +1571,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # SAVE ONLY SENT NEWS
+    # SAVE ONLY SUCCESSFULLY SENT NEWS
     # -----------------------------------------------------
 
     sent_news.add(
@@ -1406,7 +1600,7 @@ def main():
 
 
 # =========================================================
-# RUN
+# START
 # =========================================================
 
 if __name__ == "__main__":
