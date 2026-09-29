@@ -1,8 +1,11 @@
 import os
 import time
+import re
+import hashlib
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 # =========================================================
@@ -13,28 +16,141 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# مدل رایگان Gemini
-GEMINI_MODEL = "gemini-3.7-flash"
+# مدل فعلی Gemini
+GEMINI_MODEL = "gemini-3.8-flash"
 
+# در هر اجرای GitHub حداکثر این تعداد خبر
+# برای Gemini فرستاده می‌شود.
 MAX_CANDIDATES = 15
 
+# فایل اخبار منتشرشده
 SENT_FILE = "sent_news.txt"
+
+# چند خبر از هر سایت بگیریم
+NEWS_PER_SOURCE = 5
 
 
 # =========================================================
 # NEWS SOURCES
 # =========================================================
 
-RSS_FEEDS = {
+SOURCES = {
 
-    "اقتصاد و بازار":
-        "https://www.investing.com/rss/121899.rss",
+    "Reuters":
+        "reuters.com",
 
-    "کالا و طلا":
-        "https://www.investing.com/rss/commodities.rss",
+    "Bloomberg":
+        "bloomberg.com",
 
-    "کریپتو":
-        "https://www.investing.com/rss/302.rss",
+    "CNBC":
+        "cnbc.com",
+
+    "Financial Times":
+        "ft.com",
+
+    "MarketWatch":
+        "marketwatch.com",
+
+    "Investing":
+        "investing.com",
+
+    "Yahoo Finance":
+        "finance.yahoo.com",
+
+    "Wall Street Journal":
+        "wsj.com",
+
+    "CoinDesk":
+        "coindesk.com",
+
+    "Cointelegraph":
+        "cointelegraph.com",
+
+}
+
+
+# =========================================================
+# IMPORTANT KEYWORDS
+# =========================================================
+
+KEYWORDS = {
+
+    # Crypto
+    "bitcoin": 12,
+    "btc": 12,
+    "ethereum": 12,
+    "eth": 12,
+    "crypto": 10,
+    "cryptocurrency": 10,
+    "solana": 8,
+    "xrp": 8,
+
+    # Gold
+    "gold": 12,
+    "gold prices": 15,
+    "bullion": 10,
+    "silver": 7,
+
+    # Economy
+    "inflation": 12,
+    "interest rate": 14,
+    "interest rates": 14,
+    "fed": 14,
+    "federal reserve": 15,
+    "ecb": 12,
+    "central bank": 12,
+    "recession": 13,
+    "gdp": 10,
+    "employment": 9,
+    "unemployment": 10,
+    "jobs report": 12,
+
+    # Markets
+    "stock market": 12,
+    "stocks": 9,
+    "shares": 8,
+    "nasdaq": 10,
+    "s&p 500": 10,
+    "dow jones": 9,
+    "wall street": 10,
+
+    # Commodities
+    "oil": 10,
+    "crude": 10,
+    "opec": 12,
+    "natural gas": 8,
+
+    # Dollar / currencies
+    "dollar": 10,
+    "usd": 8,
+    "forex": 8,
+    "currency": 7,
+
+    # Geopolitics / politics with economic impact
+    "tariff": 14,
+    "tariffs": 14,
+    "sanction": 13,
+    "sanctions": 13,
+    "trade war": 15,
+    "war": 12,
+    "conflict": 10,
+    "iran": 12,
+    "israel": 10,
+    "russia": 10,
+    "ukraine": 10,
+    "china": 10,
+    "united states": 7,
+    "trump": 8,
+    "election": 8,
+
+    # Companies
+    "earnings": 10,
+    "revenue": 8,
+    "profit": 8,
+    "merger": 10,
+    "acquisition": 10,
+    "ipo": 10,
+    "bankruptcy": 12,
 
 }
 
@@ -62,7 +178,11 @@ def load_sent_news():
     if not os.path.exists(SENT_FILE):
         return set()
 
-    with open(SENT_FILE, "r", encoding="utf-8") as file:
+    with open(
+        SENT_FILE,
+        "r",
+        encoding="utf-8"
+    ) as file:
 
         return set(
             line.strip()
@@ -73,10 +193,84 @@ def load_sent_news():
 
 def save_sent_news(sent_news):
 
-    with open(SENT_FILE, "w", encoding="utf-8") as file:
+    with open(
+        SENT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
 
-        for link in sent_news:
-            file.write(link + "\n")
+        for item in sorted(sent_news):
+
+            file.write(
+                item + "\n"
+            )
+
+
+# =========================================================
+# GOOGLE NEWS RSS
+# =========================================================
+
+def build_google_news_url(domain):
+
+    query = (
+        f"when:2h site:{domain}"
+    )
+
+    return (
+        "https://news.google.com/rss/search?"
+        f"q={requests.utils.quote(query)}"
+        "&hl=en-US"
+        "&gl=US"
+        "&ceid=US:en"
+    )
+
+
+# =========================================================
+# DATE PARSER
+# =========================================================
+
+def parse_date(date_string):
+
+    if not date_string:
+
+        return None
+
+    try:
+
+        dt = parsedate_to_datetime(
+            date_string
+        )
+
+        if dt.tzinfo is None:
+
+            dt = dt.replace(
+                tzinfo=timezone.utc
+            )
+
+        return dt.astimezone(
+            timezone.utc
+        )
+
+    except Exception:
+
+        return None
+
+
+# =========================================================
+# NEWS ID
+# =========================================================
+
+def create_news_id(title, link):
+
+    raw = (
+        title.strip().lower()
+        + "|"
+        + link.strip().lower()
+    )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
 
 
 # =========================================================
@@ -87,7 +281,11 @@ def get_news():
 
     all_news = []
 
-    for category, url in RSS_FEEDS.items():
+    for source, domain in SOURCES.items():
+
+        url = build_google_news_url(
+            domain
+        )
 
         try:
 
@@ -95,218 +293,485 @@ def get_news():
                 url,
                 timeout=20,
                 headers={
-                    "User-Agent": "Mozilla/5.0"
+                    "User-Agent":
+                    "Mozilla/5.0"
                 }
             )
 
             response.raise_for_status()
 
-            root = ET.fromstring(response.content)
+            root = ET.fromstring(
+                response.content
+            )
 
-            for item in root.findall(".//item"):
+            items = root.findall(
+                ".//item"
+            )
 
-                title = item.findtext("title")
+            count = 0
 
-                link = item.findtext("link")
+            for item in items:
 
-                description = item.findtext("description")
+                if count >= NEWS_PER_SOURCE:
+                    break
 
-                pub_date = item.findtext("pubDate")
+                title = item.findtext(
+                    "title"
+                )
+
+                link = item.findtext(
+                    "link"
+                )
+
+                description = item.findtext(
+                    "description"
+                )
+
+                pub_date = item.findtext(
+                    "pubDate"
+                )
 
                 if not title or not link:
                     continue
 
+                title = title.strip()
+
+                link = link.strip()
+
+                description = (
+                    description.strip()
+                    if description
+                    else ""
+                )
+
+                pub_date = (
+                    pub_date.strip()
+                    if pub_date
+                    else ""
+                )
+
+                news_id = create_news_id(
+                    title,
+                    link
+                )
+
                 all_news.append({
 
-                    "category": category,
+                    "id": news_id,
 
-                    "title": title.strip(),
+                    "source": source,
 
-                    "link": link.strip(),
+                    "domain": domain,
 
-                    "description": (
-                        description.strip()
-                        if description
-                        else ""
-                    ),
+                    "title": title,
 
-                    "pub_date": (
-                        pub_date.strip()
-                        if pub_date
-                        else ""
-                    )
+                    "description":
+                        description,
+
+                    "link": link,
+
+                    "pub_date":
+                        pub_date,
 
                 })
+
+                count += 1
 
         except Exception as error:
 
             print(
-                f"RSS error [{category}]: {error}"
+                f"RSS error [{source}]: "
+                f"{error}"
             )
 
     return all_news
 
 
 # =========================================================
-# REMOVE DUPLICATES
+# CLEAN TEXT
+# =========================================================
+
+def clean_text(text):
+
+    text = re.sub(
+        r"<[^>]+>",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# =========================================================
+# DUPLICATE TITLE CHECK
+# =========================================================
+
+def normalize_title(title):
+
+    title = title.lower()
+
+    title = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        title
+    )
+
+    title = re.sub(
+        r"\s+",
+        " ",
+        title
+    )
+
+    return title.strip()
+
+
+def title_words(title):
+
+    return set(
+        normalize_title(title)
+        .split()
+    )
+
+
+def similarity(title1, title2):
+
+    words1 = title_words(title1)
+
+    words2 = title_words(title2)
+
+    if not words1 or not words2:
+
+        return 0
+
+    intersection = (
+        words1 & words2
+    )
+
+    union = (
+        words1 | words2
+    )
+
+    return (
+        len(intersection)
+        /
+        len(union)
+    )
+
+
+# =========================================================
+# REMOVE EXACT DUPLICATES
 # =========================================================
 
 def remove_duplicates(news):
 
     result = []
 
-    seen_links = set()
-
-    seen_titles = set()
+    seen_ids = set()
 
     for item in news:
 
-        link = item["link"]
-
-        title = item["title"].lower()
-
-        if link in seen_links:
+        if item["id"] in seen_ids:
             continue
 
-        if title in seen_titles:
-            continue
+        seen_ids.add(
+            item["id"]
+        )
 
-        seen_links.add(link)
-
-        seen_titles.add(title)
-
-        result.append(item)
+        result.append(
+            item
+        )
 
     return result
 
 
 # =========================================================
-# KEYWORD IMPORTANCE
+# TREND / IMPORTANCE SCORE
 # =========================================================
 
-IMPORTANT_WORDS = [
-
-    # Crypto
-    "bitcoin",
-    "btc",
-    "ethereum",
-    "eth",
-    "crypto",
-    "cryptocurrency",
-    "solana",
-    "xrp",
-
-    # Gold
-    "gold",
-    "silver",
-    "bullion",
-
-    # Economy
-    "inflation",
-    "interest rate",
-    "fed",
-    "federal reserve",
-    "ecb",
-    "central bank",
-    "recession",
-    "gdp",
-    "jobs",
-    "employment",
-    "unemployment",
-
-    # Markets
-    "stock",
-    "stocks",
-    "shares",
-    "nasdaq",
-    "s&p",
-    "dow",
-    "market",
-
-    # Commodities
-    "oil",
-    "crude",
-    "opec",
-
-    # Politics / geopolitics
-    "trump",
-    "tariff",
-    "sanction",
-    "sanctions",
-    "iran",
-    "israel",
-    "ukraine",
-    "russia",
-    "china",
-    "war",
-    "election",
-
-]
-
-
-def keyword_score(item):
+def calculate_keyword_score(item):
 
     text = (
-        item["title"] +
-        " " +
-        item["description"]
+        item["title"]
+        + " "
+        + item["description"]
     ).lower()
 
     score = 0
 
-    for word in IMPORTANT_WORDS:
+    for keyword, value in KEYWORDS.items():
 
-        if word in text:
+        if keyword in text:
 
-            score += 3
+            score += value
 
     return score
 
 
+def calculate_recency_score(item):
+
+    dt = parse_date(
+        item["pub_date"]
+    )
+
+    if not dt:
+
+        return 0
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    age_minutes = (
+        now - dt
+    ).total_seconds() / 60
+
+    if age_minutes < 15:
+
+        return 25
+
+    if age_minutes < 30:
+
+        return 22
+
+    if age_minutes < 60:
+
+        return 18
+
+    if age_minutes < 120:
+
+        return 12
+
+    if age_minutes < 180:
+
+        return 7
+
+    return 0
+
+
+def calculate_source_score(item):
+
+    important_sources = {
+
+        "Reuters": 15,
+
+        "Bloomberg": 15,
+
+        "Financial Times": 13,
+
+        "Wall Street Journal": 13,
+
+        "CNBC": 12,
+
+        "MarketWatch": 10,
+
+        "Yahoo Finance": 9,
+
+        "Investing": 8,
+
+        "CoinDesk": 10,
+
+        "Cointelegraph": 8,
+
+    }
+
+    return important_sources.get(
+        item["source"],
+        5
+    )
+
+
 # =========================================================
-# PRE-FILTER NEWS
+# CROSS-SOURCE TREND SCORE
 # =========================================================
 
-def prepare_candidates(news, sent_news):
+def calculate_cross_source_scores(news):
+
+    scores = {
+        item["id"]: 0
+        for item in news
+    }
+
+    for i in range(
+        len(news)
+    ):
+
+        for j in range(
+            i + 1,
+            len(news)
+        ):
+
+            similarity_score = similarity(
+                news[i]["title"],
+                news[j]["title"]
+            )
+
+            # اگر دو عنوان خیلی شبیه باشند،
+            # احتمالاً درباره یک اتفاق هستند.
+
+            if similarity_score >= 0.45:
+
+                scores[
+                    news[i]["id"]
+                ] += 15
+
+                scores[
+                    news[j]["id"]
+                ] += 15
+
+    return scores
+
+
+# =========================================================
+# BUILD TREND SCORE
+# =========================================================
+
+def score_news(news):
+
+    cross_scores = (
+        calculate_cross_source_scores(
+            news
+        )
+    )
+
+    for item in news:
+
+        keyword_score = (
+            calculate_keyword_score(
+                item
+            )
+        )
+
+        recency_score = (
+            calculate_recency_score(
+                item
+            )
+        )
+
+        source_score = (
+            calculate_source_score(
+                item
+            )
+        )
+
+        cross_source_score = (
+            cross_scores[
+                item["id"]
+            ]
+        )
+
+        total = (
+            keyword_score
+            + recency_score
+            + source_score
+            + cross_source_score
+        )
+
+        item[
+            "keyword_score"
+        ] = keyword_score
+
+        item[
+            "recency_score"
+        ] = recency_score
+
+        item[
+            "source_score"
+        ] = source_score
+
+        item[
+            "cross_source_score"
+        ] = cross_source_score
+
+        item[
+            "trend_score"
+        ] = total
+
+    news.sort(
+        key=lambda x:
+            x["trend_score"],
+        reverse=True
+    )
+
+    return news
+
+
+# =========================================================
+# PREPARE CANDIDATES
+# =========================================================
+
+def prepare_candidates(
+    news,
+    sent_news
+):
 
     candidates = []
 
     for item in news:
 
-        if item["link"] in sent_news:
+        # خبر قبلاً منتشر شده
+        if item["id"] in sent_news:
             continue
 
-        score = keyword_score(item)
+        # خبر خیلی قدیمی
+        dt = parse_date(
+            item["pub_date"]
+        )
 
-        item["keyword_score"] = score
+        if dt:
 
-        candidates.append(item)
+            age_hours = (
+                datetime.now(
+                    timezone.utc
+                ) - dt
+            ).total_seconds() / 3600
 
-    candidates.sort(
-        key=lambda x: x["keyword_score"],
-        reverse=True
+            if age_hours > 3:
+
+                continue
+
+        candidates.append(
+            item
+        )
+
+    candidates = score_news(
+        candidates
     )
 
-    return candidates[:MAX_CANDIDATES]
+    return candidates[
+        :MAX_CANDIDATES
+    ]
 
 
 # =========================================================
-# GEMINI
+# GEMINI API
 # =========================================================
 
 def ask_gemini(prompt):
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{GEMINI_MODEL}:generateContent"
+        f"v1beta/models/{GEMINI_MODEL}"
+        ":generateContent"
     )
 
     headers = {
-        "Content-Type": "application/json"
+
+        "Content-Type":
+            "application/json"
+
     }
 
     params = {
-        "key": GEMINI_API_KEY
+
+        "key":
+            GEMINI_API_KEY
+
     }
 
     data = {
@@ -318,7 +783,8 @@ def ask_gemini(prompt):
                 "parts": [
 
                     {
-                        "text": prompt
+                        "text":
+                            prompt
                     }
 
                 ]
@@ -329,9 +795,14 @@ def ask_gemini(prompt):
 
         "generationConfig": {
 
-            "temperature": 0.2,
+            "temperature":
+                0.2,
 
-            "maxOutputTokens": 900
+            "maxOutputTokens":
+                1200,
+
+            "responseMimeType":
+                "application/json"
 
         }
 
@@ -342,17 +813,26 @@ def ask_gemini(prompt):
         try:
 
             response = requests.post(
+
                 url,
+
                 params=params,
+
                 headers=headers,
+
                 json=data,
-                timeout=60
+
+                timeout=90
+
             )
 
-            if response.status_code in [429, 503]:
+            if response.status_code in [
+                429,
+                503
+            ]:
 
                 print(
-                    f"Gemini temporary error: "
+                    "Gemini temporary error: "
                     f"{response.status_code}"
                 )
 
@@ -368,10 +848,19 @@ def ask_gemini(prompt):
 
             result = response.json()
 
-            return (
-                result["candidates"][0]
-                ["content"]["parts"][0]["text"]
+            text = (
+                result[
+                    "candidates"
+                ][0][
+                    "content"
+                ][
+                    "parts"
+                ][0][
+                    "text"
+                ]
             )
+
+            return text
 
         except Exception as error:
 
@@ -391,140 +880,186 @@ def ask_gemini(prompt):
 
 
 # =========================================================
-# AI NEWS SELECTION + ANALYSIS
+# GEMINI ANALYSIS
 # =========================================================
 
-def analyze_news(candidates):
+def analyze_candidates(
+    candidates
+):
 
     news_text = ""
 
-    for index, item in enumerate(candidates, start=1):
+    for index, item in enumerate(
+        candidates,
+        start=1
+    ):
 
         news_text += f"""
 
 خبر شماره {index}
 
-دسته:
-{item["category"]}
+منبع:
+{item["source"]}
 
 عنوان:
 {item["title"]}
 
 توضیح:
-{item["description"]}
+{clean_text(item["description"])}
 
 زمان:
 {item["pub_date"]}
 
+امتیاز ترند اولیه:
+{item["trend_score"]}
+
+امتیاز کلمات کلیدی:
+{item["keyword_score"]}
+
+امتیاز تازگی:
+{item["recency_score"]}
+
+امتیاز منبع:
+{item["source_score"]}
+
+امتیاز پوشش چندمنبعی:
+{item["cross_source_score"]}
+
 لینک:
 {item["link"]}
-
-امتیاز اولیه:
-{item["keyword_score"]}
 
 --------------------------------
 """
 
 
     prompt = f"""
-تو سردبیر حرفه‌ای یک کانال فارسی به نام «میرزا» هستی.
+تو سردبیر حرفه‌ای کانال اقتصادی «میرزا» هستی.
 
-وظیفه تو این است که از بین خبرهای زیر فقط
-مهم‌ترین خبر اقتصادی/بازاری روز را انتخاب کنی.
+از بین خبرهای زیر مهم‌ترین خبر جدید و
+قابل انتشار را انتخاب کن.
 
-موضوعات مهم:
+موضوعات مورد توجه:
 
+- اقتصاد
+- سیاست مؤثر بر اقتصاد
 - طلا
 - بیت‌کوین
 - اتریوم
 - رمزارزها
-- سهام و بورس
-- شرکت‌های بزرگ
+- بورس
+- سهام شرکت‌ها
 - دلار و ارز
 - نفت
-- تورم
-- نرخ بهره
 - بانک‌های مرکزی
-- اقتصاد جهانی
-- سیاست‌هایی که روی اقتصاد و بازار اثر دارند
-- جنگ، تحریم، تعرفه و تنش‌های ژئوپلیتیکی با اثر اقتصادی
+- نرخ بهره
+- تورم
+- تعرفه
+- تحریم
+- جنگ و ژئوپلیتیک با اثر اقتصادی
+- شرکت‌های بزرگ
 
-خبر را با این معیارها بررسی کن:
+معیار انتخاب:
 
-1. تازگی خبر
-2. اهمیت واقعی
-3. اثر احتمالی روی بازار
-4. میزان توجه بازار به موضوع
-5. ارتباط با طلا، کریپتو، سهام، ارز یا اقتصاد
-6. تکراری نبودن
+1. اهمیت خبر
+2. تازگی
+3. اثر احتمالی بر بازار
+4. میزان توجه احتمالی بازار
+5. پوشش شدن خبر توسط چند منبع
+6. ارتباط با دارایی‌های مهم
 7. معتبر بودن منبع
+8. جدید بودن اتفاق
 
-اگر چند خبر مهم هستند، فقط یکی را انتخاب کن.
+فقط به عدد امتیاز اولیه اعتماد نکن.
+خودت خبر را بررسی و مقایسه کن.
 
-نکته مهم:
+اگر هیچ خبر مهمی وجود ندارد:
 
-خبرهای صرفاً سرگرمی، تبلیغاتی، کم‌اهمیت،
-تحلیل‌های بدون اتفاق جدید و اخبار تکراری را انتخاب نکن.
+selected_index = 0
 
-اگر هیچ خبر واقعاً مهمی وجود ندارد،
-دقیقاً بنویس:
+قرار بده.
 
-NO_IMPORTANT_NEWS
+اگر خبر مهم وجود دارد:
+شماره آن را انتخاب کن.
 
+اگر چند منبع درباره یک اتفاق مشابه
+خبر داده‌اند، آن اتفاق را ترندتر در نظر بگیر.
 
-اگر خبر مربوط به یک سهم یا شرکت است:
+------------------------------
 
-- اسم شرکت را واضح بنویس.
-- اگر نماد سهام در خبر وجود دارد، نماد را هم بنویس.
-- توضیح بده خبر چه اثری می‌تواند روی آن شرکت یا صنعت داشته باشد.
-- در پایان لینک اصلی خبر را برای اطلاعات بیشتر قرار بده.
+قوانین تحلیل:
 
-اگر خبر مربوط به اتریوم یا بیت‌کوین است:
+اگر خبر درباره طلا است:
 
-- توضیح بده چه اتفاقی افتاده.
-- چرا برای بازار مهم است.
-- اثر احتمالی روی بازار کریپتو را توضیح بده.
+- علت اهمیت خبر را توضیح بده.
+- ارتباط احتمالی با دلار، نرخ بهره،
+تورم و ریسک جهانی را بررسی کن.
 
-اگر خبر مربوط به طلا است:
+اگر درباره بیت‌کوین یا اتریوم است:
 
-- توضیح بده چرا طلا تحت تأثیر این خبر قرار گرفته.
-- در صورت ارتباط، نرخ بهره، دلار، تورم یا ریسک‌های ژئوپلیتیکی را توضیح بده.
+- اتفاق را توضیح بده.
+- دلیل اهمیت آن را بگو.
+- اثر احتمالی روی کریپتو را توضیح بده.
+
+اگر درباره سهام یا شرکت است:
+
+- نام شرکت را واضح بنویس.
+- اگر نماد سهم در خبر وجود دارد،
+  نماد را بنویس.
+- اثر احتمالی خبر روی شرکت یا صنعت
+  را توضیح بده.
+- لینک اصلی خبر را ارائه کن.
 
 اگر خبر سیاسی است:
 
-فقط اثر اقتصادی و بازاری آن را توضیح بده.
-از تبلیغ یا حمایت از هیچ حزب، فرد یا جریان سیاسی خودداری کن.
+فقط اثر اقتصادی و بازار آن را توضیح بده.
+
+از حمایت یا مخالفت سیاسی خودداری کن.
 
 هیچ توصیه خرید یا فروش نده.
 
-متن نهایی باید فارسی، کوتاه و کاربردی باشد.
+متن فارسی باشد.
 
-حداکثر حدود 250 کلمه.
+کوتاه و کاربردی باشد.
 
-ساختار خروجی:
+حدود 150 تا 250 کلمه.
+
+------------------------------
+
+ساختار پیام:
 
 🔥 تیتر
 
 📰 چه اتفاقی افتاده؟
-یک توضیح کوتاه و واضح.
 
 📊 تحلیل میرزا
-توضیح بده این خبر چرا مهم است و چه بازارهایی ممکن است تحت تأثیر قرار بگیرند.
 
 🎯 بازار مرتبط
-مثلاً:
-طلا / اتریوم / بیت‌کوین / سهام / دلار / نفت / اقتصاد
 
-📈 جهت احتمالی اثر
+📈 جهت احتمالی اثر:
 مثبت / منفی / خنثی / نامشخص
 
 ⚠️ نکته مهم
-یک نکته مهم که مخاطب باید بداند.
 
 🔗 اطلاعات بیشتر:
-لینک اصلی خبر
+لینک اصلی
 
 #میرزا
+
+------------------------------
+
+فقط JSON معتبر برگردان:
+
+{{
+    "selected_index": 1,
+    "message": "متن کامل پیام"
+}}
+
+اگر هیچ خبر مهمی وجود ندارد:
+
+{{
+    "selected_index": 0,
+    "message": ""
+}}
 
 اخبار:
 
@@ -532,34 +1067,74 @@ NO_IMPORTANT_NEWS
 """
 
 
-    return ask_gemini(prompt)
+    response = ask_gemini(
+        prompt
+    )
+
+    if not response:
+
+        return None
+
+    try:
+
+        import json
+
+        data = json.loads(
+            response
+        )
+
+        return data
+
+    except Exception as error:
+
+        print(
+            f"JSON parsing error: "
+            f"{error}"
+        )
+
+        print(
+            "Gemini response:"
+        )
+
+        print(response)
+
+        return None
 
 
 # =========================================================
 # TELEGRAM
 # =========================================================
 
-def send_telegram(message):
+def send_telegram(
+    message
+):
 
     url = (
-        f"https://api.telegram.org/bot"
-        f"{BOT_TOKEN}/sendMessage"
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
     )
 
     data = {
 
-        "chat_id": CHAT_ID,
+        "chat_id":
+            CHAT_ID,
 
-        "text": message,
+        "text":
+            message,
 
-        "disable_web_page_preview": False
+        "disable_web_page_preview":
+            False
 
     }
 
     response = requests.post(
+
         url,
+
         data=data,
+
         timeout=30
+
     )
 
     response.raise_for_status()
@@ -573,41 +1148,83 @@ def send_telegram(message):
 
 def main():
 
-    print("Starting Mirza News Bot...")
+    print(
+        "================================"
+    )
+
+    print(
+        "Starting Mirza News Bot"
+    )
+
+    print(
+        "================================"
+    )
+
+
+    # ---------------------------------
+    # Previous news
+    # ---------------------------------
 
     sent_news = load_sent_news()
 
     print(
-        f"Previously sent news: "
+        f"Previously published: "
         f"{len(sent_news)}"
     )
 
-    # دریافت اخبار
+
+    # ---------------------------------
+    # Get news
+    # ---------------------------------
+
     news = get_news()
 
     print(
-        f"Total RSS news found: "
+        f"Total news collected: "
         f"{len(news)}"
     )
 
-    # حذف تکراری‌ها
-    news = remove_duplicates(news)
+
+    if not news:
+
+        print(
+            "No news collected."
+        )
+
+        return
+
+
+    # ---------------------------------
+    # Remove duplicates
+    # ---------------------------------
+
+    news = remove_duplicates(
+        news
+    )
 
     print(
         f"After duplicate removal: "
         f"{len(news)}"
     )
 
-    # انتخاب کاندیداها
+
+    # ---------------------------------
+    # Candidates
+    # ---------------------------------
+
     candidates = prepare_candidates(
+
         news,
+
         sent_news
+
     )
 
     print(
         f"Candidate news: "
         f"{len(candidates)}"
     )
+
 
     if not candidates:
 
@@ -618,65 +1235,167 @@ def main():
         return
 
 
-    # تحلیل با Gemini
-    result = analyze_news(
+    # ---------------------------------
+    # Show candidates
+    # ---------------------------------
+
+    print(
+        "\nTop candidates:"
+    )
+
+    for index, item in enumerate(
+        candidates,
+        start=1
+    ):
+
+        print(
+            f"{index}. "
+            f"[{item['trend_score']}] "
+            f"{item['source']} - "
+            f"{item['title']}"
+        )
+
+
+    # ---------------------------------
+    # Gemini
+    # ---------------------------------
+
+    print(
+        "\nSending candidates to Gemini..."
+    )
+
+    result = analyze_candidates(
         candidates
     )
+
 
     if not result:
 
         print(
-            "Gemini failed."
+            "Gemini analysis failed."
         )
 
         return
 
 
-    # هیچ خبر مهمی نبود
-    if "NO_IMPORTANT_NEWS" in result:
+    selected_index = result.get(
+        "selected_index",
+        0
+    )
+
+    message = result.get(
+        "message",
+        ""
+    )
+
+
+    print(
+        f"Gemini selected: "
+        f"{selected_index}"
+    )
+
+
+    # ---------------------------------
+    # No important news
+    # ---------------------------------
+
+    if selected_index == 0:
 
         print(
-            "No important news found."
+            "No important news."
         )
 
         return
 
 
-    # ارسال به تلگرام
+    if not message:
+
+        print(
+            "Empty message."
+        )
+
+        return
+
+
+    # ---------------------------------
+    # Validate index
+    # ---------------------------------
+
+    if (
+        selected_index < 1
+        or
+        selected_index > len(candidates)
+    ):
+
+        print(
+            "Invalid selected index."
+        )
+
+        return
+
+
+    # ---------------------------------
+    # Selected article
+    # ---------------------------------
+
+    selected_article = candidates[
+        selected_index - 1
+    ]
+
+    selected_id = (
+        selected_article["id"]
+    )
+
+
+    # ---------------------------------
+    # Send Telegram
+    # ---------------------------------
+
     try:
 
-        send_telegram(result)
+        send_telegram(
+            message
+        )
 
         print(
-            "Telegram message sent successfully."
+            "Telegram message sent."
         )
 
     except Exception as error:
 
         print(
-            f"Telegram error: {error}"
+            f"Telegram error: "
+            f"{error}"
         )
 
         return
 
 
-    # لینک‌های کاندیدا را ثبت می‌کنیم
-    # تا در اجرای بعدی دوباره بررسی نشوند.
+    # ---------------------------------
+    # SAVE ONLY SELECTED NEWS
+    # ---------------------------------
 
-    for item in candidates:
-
-        sent_news.add(
-            item["link"]
-        )
+    sent_news.add(
+        selected_id
+    )
 
     save_sent_news(
         sent_news
+    )
+
+
+    print(
+        "Selected news saved."
     )
 
     print(
         "Finished. Published: 1"
     )
 
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
 
