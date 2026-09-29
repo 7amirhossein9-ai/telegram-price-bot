@@ -1,6 +1,7 @@
 import os
 import re
 import html
+import time
 import requests
 import xml.etree.ElementTree as ET
 
@@ -18,8 +19,11 @@ SENT_FILE = "sent_news.txt"
 
 MAX_NEWS_PER_RUN = 1
 
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+
 
 def clean_text(text):
+
     if not text:
         return ""
 
@@ -36,6 +40,7 @@ def load_sent_news():
         return set()
 
     with open(SENT_FILE, "r", encoding="utf-8") as file:
+
         return set(
             line.strip()
             for line in file
@@ -71,22 +76,28 @@ def get_news(feed_url, category):
 
         for item in root.findall(".//item"):
 
-            title = item.findtext("title", "")
-            link = item.findtext("link", "")
-            description = item.findtext(
-                "description",
-                ""
+            title = clean_text(
+                item.findtext("title", "")
             )
 
-            title = clean_text(title)
-            description = clean_text(description)
+            link = item.findtext(
+                "link",
+                ""
+            ).strip()
+
+            description = clean_text(
+                item.findtext(
+                    "description",
+                    ""
+                )
+            )
 
             if not title or not link:
                 continue
 
             news.append({
                 "title": title,
-                "link": link.strip(),
+                "link": link,
                 "description": description,
                 "category": category
             })
@@ -103,48 +114,51 @@ def get_news(feed_url, category):
 def ask_gemini(news):
 
     prompt = f"""
-تو تحلیلگر بازار مالی کانال تلگرامی Mirza هستی.
+تو تحلیلگر بازار مالی برای کانال تلگرامی Mirza هستی.
 
-این خبر را تحلیل کن.
+خبر زیر را بررسی کن.
 
 عنوان:
 {news["title"]}
 
-متن خبر:
+متن:
 {news["description"]}
 
-خروجی فقط فارسی باشد.
+فقط فارسی بنویس.
 
-ساختار خروجی:
+ساختار:
 
 📝 خلاصه خبر:
-در 2 تا 3 جمله توضیح بده خبر چیست.
+2 تا 3 جمله.
 
 📊 تحلیل بازار:
-توضیح بده این خبر چه ارتباطی با طلا، دلار،
-نفت، بورس یا رمزارزها دارد.
+توضیح بده خبر چه اثری ممکن است روی
+طلا، دلار، نفت، بورس یا رمزارزها داشته باشد.
 
 📈 جهت احتمالی اثر:
-مثبت، منفی، خنثی یا نامشخص.
+مثبت / منفی / خنثی / نامشخص
 
-اگر اطلاعات کافی وجود ندارد، بنویس:
+اگر اطلاعات کافی نیست:
 نامشخص
 
 🔎 نکته مهم:
-یک نکته کوتاه بگو که برای بررسی اثر واقعی خبر
-باید زیر نظر گرفته شود.
+یک نکته کوتاه برای پیگیری بازار.
 
-اطلاعاتی که در خبر وجود ندارد را به عنوان واقعیت اضافه نکن.
+اطلاعاتی که در خبر نیست را به عنوان واقعیت اضافه نکن.
 
 توصیه خرید یا فروش نده.
 
-تحلیل را کوتاه و مناسب تلگرام بنویس.
+متن کوتاه و مناسب تلگرام باشد.
 """
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        "v1beta/models/gemini-3.8-flash:generateContent"
+        f"v1beta/models/{GEMINI_MODEL}:generateContent"
     )
+
+    headers = {
+        "Content-Type": "application/json"
+    }
 
     params = {
         "key": GEMINI_API_KEY
@@ -162,20 +176,65 @@ def ask_gemini(news):
         ]
     }
 
-    response = requests.post(
-        url,
-        params=params,
-        json=data,
-        timeout=60
-    )
+    for attempt in range(3):
 
-    response.raise_for_status()
+        try:
 
-    result = response.json()
+            response = requests.post(
+                url,
+                headers=headers,
+                params=params,
+                json=data,
+                timeout=60
+            )
 
-    return (
-        result["candidates"][0]
-        ["content"]["parts"][0]["text"]
+            if response.status_code == 200:
+
+                result = response.json()
+
+                return (
+                    result["candidates"][0]
+                    ["content"]["parts"][0]["text"]
+                )
+
+            if response.status_code in [429, 503]:
+
+                print(
+                    f"Gemini temporary error "
+                    f"{response.status_code}. "
+                    f"Attempt {attempt + 1}/3"
+                )
+
+                if attempt < 2:
+                    time.sleep(20)
+                    continue
+
+                raise Exception(
+                    f"Gemini unavailable: "
+                    f"HTTP {response.status_code}"
+                )
+
+            print(
+                "Gemini response:",
+                response.text[:1000]
+            )
+
+            response.raise_for_status()
+
+        except requests.exceptions.RequestException as error:
+
+            if attempt == 2:
+                raise error
+
+            print(
+                f"Connection error. "
+                f"Retry {attempt + 1}/3"
+            )
+
+            time.sleep(20)
+
+    raise Exception(
+        "Gemini request failed."
     )
 
 
@@ -205,13 +264,19 @@ def send_to_telegram(message):
 def main():
 
     if not BOT_TOKEN:
-        raise Exception("BOT_TOKEN is missing.")
+        raise Exception(
+            "BOT_TOKEN is missing."
+        )
 
     if not CHAT_ID:
-        raise Exception("CHAT_ID is missing.")
+        raise Exception(
+            "CHAT_ID is missing."
+        )
 
     if not GEMINI_API_KEY:
-        raise Exception("GEMINI_API_KEY is missing.")
+        raise Exception(
+            "GEMINI_API_KEY is missing."
+        )
 
     sent_news = load_sent_news()
 
@@ -226,7 +291,9 @@ def main():
 
         all_news.extend(news)
 
-    published_count = 0
+    print(
+        f"Total RSS news found: {len(all_news)}"
+    )
 
     for news in all_news:
 
@@ -234,6 +301,10 @@ def main():
 
         if news_id in sent_news:
             continue
+
+        print(
+            f"New news found: {news['title']}"
+        )
 
         try:
 
@@ -264,25 +335,28 @@ def main():
 
             sent_news.add(news_id)
 
-            published_count += 1
+            save_sent_news(sent_news)
 
             print(
-                f"Published: {news['title']}"
+                "Telegram message sent successfully."
             )
 
-            if published_count >= MAX_NEWS_PER_RUN:
-                break
+            print(
+                "Finished. Published: 1"
+            )
+
+            return
 
         except Exception as error:
 
             print(
-                f"Processing error: {error}"
+                f"Processing stopped: {error}"
             )
 
-    save_sent_news(sent_news)
+            return
 
     print(
-        f"Finished. Published: {published_count}"
+        "Finished. Published: 0"
     )
 
 
