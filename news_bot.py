@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import html
 import hashlib
 import requests
 import xml.etree.ElementTree as ET
@@ -51,7 +52,7 @@ SOURCES = {
 
 
 # =========================================================
-# IMPORTANT KEYWORDS
+# KEYWORDS
 # =========================================================
 
 KEYWORDS = {
@@ -163,7 +164,7 @@ KEYWORDS = {
 
 
 # =========================================================
-# SOURCE IMPORTANCE
+# SOURCE SCORES
 # =========================================================
 
 SOURCE_SCORE = {
@@ -279,9 +280,7 @@ def create_news_id(
     link
 ):
 
-    raw = (
-        f"{title}|{link}"
-    )
+    raw = f"{title}|{link}"
 
     return hashlib.sha256(
         raw.encode("utf-8")
@@ -289,19 +288,15 @@ def create_news_id(
 
 
 # =========================================================
-# GOOGLE NEWS RSS URL
+# GOOGLE NEWS RSS
 # =========================================================
 
 def get_rss_url(domain):
 
-    query = (
-        f"when:2h site:{domain}"
-    )
+    query = f"when:2h site:{domain}"
 
-    encoded_query = (
-        requests.utils.quote(
-            query
-        )
+    encoded_query = requests.utils.quote(
+        query
     )
 
     return (
@@ -332,7 +327,7 @@ def clean_title(title):
 
 
 # =========================================================
-# VALID NEWS FILTER
+# VALID NEWS
 # =========================================================
 
 def is_valid_news(
@@ -349,9 +344,7 @@ def is_valid_news(
     if not link:
         return False
 
-    lower_title = (
-        title.lower()
-    )
+    lower_title = title.lower()
 
     bad_patterns = [
         "print edition",
@@ -418,20 +411,20 @@ def parse_rss(
 
     for item in items[:8]:
 
-        title_element = (
-            item.find("title")
+        title_element = item.find(
+            "title"
         )
 
-        link_element = (
-            item.find("link")
+        link_element = item.find(
+            "link"
         )
 
-        date_element = (
-            item.find("pubDate")
+        date_element = item.find(
+            "pubDate"
         )
 
-        source_element = (
-            item.find("source")
+        source_element = item.find(
+            "source"
         )
 
         title = (
@@ -548,9 +541,7 @@ def collect_news():
 # REMOVE DUPLICATES
 # =========================================================
 
-def remove_duplicates(
-    news
-):
+def remove_duplicates(news):
 
     seen = set()
 
@@ -558,9 +549,7 @@ def remove_duplicates(
 
     for article in news:
 
-        article_id = (
-            article["id"]
-        )
+        article_id = article["id"]
 
         if article_id in seen:
             continue
@@ -580,9 +569,7 @@ def remove_duplicates(
 # KEYWORD SCORE
 # =========================================================
 
-def keyword_score(
-    title
-):
+def keyword_score(title):
 
     text = title.lower()
 
@@ -626,9 +613,7 @@ def keyword_score(
 # RECENCY SCORE
 # =========================================================
 
-def recency_score(
-    published
-):
+def recency_score(published):
 
     if not published:
         return 5
@@ -663,9 +648,7 @@ def recency_score(
 # TITLE WORDS
 # =========================================================
 
-def title_words(
-    title
-):
+def title_words(title):
 
     words = re.findall(
         r"[a-zA-Z0-9]+",
@@ -673,7 +656,6 @@ def title_words(
     )
 
     stop_words = {
-
         "the",
         "a",
         "an",
@@ -691,7 +673,6 @@ def title_words(
         "at",
         "after",
         "before",
-
     }
 
     return {
@@ -796,12 +777,10 @@ def calculate_cross_source_scores(
 
 
 # =========================================================
-# SCORE ALL NEWS
+# SCORE NEWS
 # =========================================================
 
-def score_news(
-    news
-):
+def score_news(news):
 
     cross_scores = (
         calculate_cross_source_scores(
@@ -811,48 +790,42 @@ def score_news(
 
     for article in news:
 
-        source = article[
-            "source"
-        ]
+        source = article["source"]
 
-        article[
-            "keyword_score"
-        ] = keyword_score(
-            article["title"]
+        article["keyword_score"] = (
+            keyword_score(
+                article["title"]
+            )
         )
 
-        article[
-            "recency_score"
-        ] = recency_score(
-            article["published"]
+        article["recency_score"] = (
+            recency_score(
+                article["published"]
+            )
         )
 
-        article[
-            "source_score"
-        ] = SOURCE_SCORE.get(
-            source,
-            10
+        article["source_score"] = (
+            SOURCE_SCORE.get(
+                source,
+                10
+            )
         )
 
-        article[
-            "cross_source_score"
-        ] = cross_scores.get(
-            article["id"],
-            0
+        article["cross_source_score"] = (
+            cross_scores.get(
+                article["id"],
+                0
+            )
         )
 
-        article[
-            "score"
-        ] = (
-
+        article["score"] = (
             article["keyword_score"]
-
-            + article["recency_score"]
-
-            + article["source_score"]
-
-            + article["cross_source_score"]
-
+            +
+            article["recency_score"]
+            +
+            article["source_score"]
+            +
+            article["cross_source_score"]
         )
 
     return sorted(
@@ -909,7 +882,7 @@ def prepare_candidates(
 
 
 # =========================================================
-# GEMINI ANALYSIS
+# GEMINI
 # =========================================================
 
 def analyze_with_gemini(
@@ -939,7 +912,7 @@ def analyze_with_gemini(
 لینک:
 {article["link"]}
 
-امتیاز:
+امتیاز اهمیت:
 {article["score"]}
 """
         )
@@ -949,68 +922,108 @@ def analyze_with_gemini(
     )
 
     prompt = f"""
-تو تحلیلگر اخبار اقتصادی و بازارهای مالی برای کانال تلگرامی «میرزا» هستی.
+تو سردبیر و تحلیلگر اقتصادی کانال تلگرامی «میرزا» هستی.
 
-از بین خبرهای زیر فقط مهم‌ترین خبر را انتخاب کن.
+از بین خبرهای زیر فقط یک خبر را انتخاب کن؛
+خبری که بیشترین اهمیت واقعی برای اقتصاد و بازارهای مالی دارد.
 
-معیارها:
+اولویت انتخاب:
 
-- اهمیت اقتصادی
-- اثر احتمالی بر بازارهای مالی
-- طلا
-- بیت‌کوین
-- اتریوم
-- سهام
-- دلار
-- نفت
-- نرخ بهره
-- تورم
-- بانک‌های مرکزی
-- تجارت جهانی
-- تحریم‌ها و تعرفه‌ها
-- رویدادهای سیاسی فقط در صورتی که اثر اقتصادی داشته باشند
+1. اخبار مهم اقتصاد جهانی
+2. نرخ بهره و بانک‌های مرکزی
+3. تورم و داده‌های اقتصادی
+4. دلار و ارزها
+5. طلا
+6. بیت‌کوین و اتریوم
+7. بازار سهام و شرکت‌های مهم
+8. نفت و کالاها
+9. تعرفه‌ها و تجارت جهانی
+10. رویدادهای سیاسی فقط در صورتی که اثر اقتصادی یا بازاری مهم داشته باشند.
 
-اگر چند منبع درباره یک اتفاق مشابه خبر داده‌اند،
-این موضوع را نشانه اهمیت بیشتر در نظر بگیر.
+اگر یک اتفاق در چند منبع مختلف منتشر شده باشد،
+اهمیت آن را بیشتر در نظر بگیر.
 
-اگر هیچ خبر واقعاً مهمی وجود ندارد:
+اگر هیچ خبر واقعاً مهمی وجود ندارد،
+selected_index را برابر 0 قرار بده.
 
-selected_index = 0
+اگر خبر مهم وجود دارد، این 5 مورد را تولید کن:
 
-اگر خبر مهم وجود دارد:
+1. headline
+یک عنوان فارسی جذاب و حرفه‌ای برای خبر.
+عنوان نباید اغراق‌آمیز یا کلیک‌بیتی باشد.
 
-selected_index را شماره همان خبر قرار بده.
+2. summary
+خلاصه خود خبر در 2 تا 4 جمله.
+فقط مهم‌ترین واقعیت‌ها را بگو.
 
-سپس یک تحلیل فارسی کوتاه بنویس.
+3. analysis
+بخش «تحلیل میرزا».
+در این بخش توضیح بده:
+- این خبر چرا مهم است؟
+- چه چیزی باعث این اتفاق شده؟
+- چه بازارهایی ممکن است تحت تأثیر قرار بگیرند؟
+- اثر احتمالی آن بر طلا، دلار، بیت‌کوین، سهام یا نفت چیست؟
+فقط موارد مرتبط را بررسی کن.
 
-قوانین متن:
+تحلیل باید استدلال داشته باشد،
+نه اینکه فقط خبر را دوباره تکرار کند.
 
-- فارسی روان
-- حدود 150 تا 250 کلمه
-- ابتدا توضیح خبر
-- سپس اهمیت خبر
-- سپس اثر احتمالی بر بازار
-- بدون توصیه خرید یا فروش
-- بدون پیش‌بینی قطعی
-- بدون قضاوت سیاسی
-- درباره سیاستمداران فقط واقعیت و اثر اقتصادی را بیان کن
-- منبع را در پایان ذکر کن
-- اگر خبر مربوط به یک شرکت است، نام شرکت و در صورت وجود نماد بورسی آن را ذکر کن
+4. suggestion
+بخش «پیشنهاد میرزا».
 
-فقط JSON معتبر برگردان.
+این بخش توصیه قطعی خرید یا فروش نباشد.
+به جای آن یک دیدگاه عملی و محتاطانه بده.
 
-فرمت:
+مثلاً:
+- فعلاً بهتر است واکنش بازار به داده جدید بررسی شود.
+- معامله‌گران باید نوسان دلار و بازده اوراق را زیر نظر داشته باشند.
+- برای سهام شرکت مربوطه، واکنش قیمت و حجم معاملات اهمیت دارد.
+- در بازار طلا، رفتار دلار و نرخ بهره باید همزمان بررسی شود.
+
+پیشنهاد باید بر اساس همان خبر باشد.
+
+5. source
+نام منبع خبر را بنویس.
+
+قوانین بسیار مهم:
+
+- تمام خروجی فارسی باشد.
+- متن حرفه‌ای و مناسب کانال تلگرام باشد.
+- از ایموجی زیاد استفاده نکن.
+- از جملات کلی و بی‌محتوا استفاده نکن.
+- تحلیل باید حداقل چند جمله واقعی و استدلالی داشته باشد.
+- خبر را با تحلیل اشتباه نگیر.
+- هیچ توصیه قطعی «بخر»، «بفروش» یا «لانگ/شورت» نده.
+- پیش‌بینی قطعی قیمت نده.
+- درباره سیاستمداران قضاوت شخصی یا سیاسی نکن.
+- اگر خبر سیاسی است، فقط اثر اقتصادی و بازاری آن را بررسی کن.
+- اگر خبر درباره شرکت است، نام شرکت و در صورت وجود نماد بورسی آن را ذکر کن.
+- اگر خبر درباره رمزارز است، دلیل اهمیت آن برای بازار رمزارز را توضیح بده.
+- اگر خبر درباره طلاست، ارتباط آن با دلار، نرخ بهره، تورم یا ریسک ژئوپلیتیک را بررسی کن.
+- اگر ارتباطی وجود ندارد، چیزی را به زور اضافه نکن.
+
+خروجی فقط JSON معتبر باشد.
+
+فرمت دقیق:
 
 {{
     "selected_index": 0,
-    "message": ""
+    "headline": "",
+    "summary": "",
+    "analysis": "",
+    "suggestion": "",
+    "source": ""
 }}
 
-یا:
+اگر خبر مهم وجود داشت:
 
 {{
     "selected_index": 3,
-    "message": "متن تحلیل"
+    "headline": "عنوان خبر",
+    "summary": "خلاصه خبر",
+    "analysis": "تحلیل میرزا",
+    "suggestion": "پیشنهاد میرزا",
+    "source": "Reuters"
 }}
 
 خبرها:
@@ -1046,12 +1059,12 @@ selected_index را شماره همان خبر قرار بده.
                 "application/json",
 
             "maxOutputTokens":
-                1000,
+                1600,
 
             "thinkingConfig": {
 
                 "thinkingLevel":
-                    "low"
+                    "medium"
 
             }
 
@@ -1069,6 +1082,8 @@ selected_index را شماره همان خبر قرار بده.
 
     }
 
+    # Only retry temporary server errors.
+    # Do NOT retry quota errors.
     max_retries = 3
 
     for attempt in range(
@@ -1091,7 +1106,7 @@ selected_index را شماره همان خبر قرار بده.
 
                 json=payload,
 
-                timeout=90
+                timeout=120
 
             )
 
@@ -1100,9 +1115,9 @@ selected_index را شماره همان خبر قرار بده.
                 response.status_code
             )
 
-            # -------------------------------------------------
+            # =================================================
             # SUCCESS
-            # -------------------------------------------------
+            # =================================================
 
             if response.status_code == 200:
 
@@ -1116,7 +1131,7 @@ selected_index را شماره همان خبر قرار بده.
 
                 text = text.strip()
 
-                # Remove markdown JSON fences
+                # Remove markdown fences
                 text = re.sub(
                     r"^```json",
                     "",
@@ -1144,9 +1159,9 @@ selected_index را شماره همان خبر قرار بده.
 
                 return result
 
-            # -------------------------------------------------
-            # QUOTA ERROR
-            # -------------------------------------------------
+            # =================================================
+            # QUOTA
+            # =================================================
 
             if response.status_code == 429:
 
@@ -1156,29 +1171,18 @@ selected_index را شماره همان خبر قرار بده.
 
                 try:
 
-                    error_data = (
-                        response.json()
-                    )
-
                     print(
-                        error_data
+                        response.text[:1500]
                     )
 
                 except Exception:
-
-                    print(
-                        response.text[:1000]
-                    )
-
-                print(
-                    "No more retry attempts."
-                )
+                    pass
 
                 return None
 
-            # -------------------------------------------------
+            # =================================================
             # TEMPORARY SERVER ERROR
-            # -------------------------------------------------
+            # =================================================
 
             if response.status_code in [
                 500,
@@ -1188,8 +1192,8 @@ selected_index را شماره همان خبر قرار بده.
             ]:
 
                 print(
-                    "Gemini temporary server error:"
-                    f" {response.status_code}"
+                    "Gemini temporary server error:",
+                    response.status_code
                 )
 
                 if attempt < max_retries - 1:
@@ -1211,13 +1215,13 @@ selected_index را شماره همان خبر قرار بده.
 
                 return None
 
-            # -------------------------------------------------
+            # =================================================
             # OTHER ERROR
-            # -------------------------------------------------
+            # =================================================
 
             print(
-                "Gemini API error:"
-                f" {response.status_code}"
+                "Gemini API error:",
+                response.status_code
             )
 
             print(
@@ -1234,13 +1238,26 @@ selected_index را شماره همان خبر قرار بده.
 
             if attempt < max_retries - 1:
 
-                time.sleep(
+                wait_time = (
                     20 * (attempt + 1)
+                )
+
+                time.sleep(
+                    wait_time
                 )
 
             else:
 
                 return None
+
+        except json.JSONDecodeError as e:
+
+            print(
+                "Gemini returned invalid JSON:",
+                e
+            )
+
+            return None
 
         except Exception as e:
 
@@ -1255,7 +1272,116 @@ selected_index را شماره همان خبر قرار بده.
 
 
 # =========================================================
-# TELEGRAM
+# FORMAT TELEGRAM MESSAGE
+# =========================================================
+
+def format_telegram_message(
+    result,
+    article
+):
+
+    headline = result.get(
+        "headline",
+        ""
+    ).strip()
+
+    summary = result.get(
+        "summary",
+        ""
+    ).strip()
+
+    analysis = result.get(
+        "analysis",
+        ""
+    ).strip()
+
+    suggestion = result.get(
+        "suggestion",
+        ""
+    ).strip()
+
+    source = result.get(
+        "source",
+        article["source"]
+    ).strip()
+
+    # Fallbacks
+    if not headline:
+        headline = article["title"]
+
+    if not summary:
+        summary = article["title"]
+
+    if not analysis:
+        analysis = (
+            "تحلیل کافی برای این خبر "
+            "دریافت نشد."
+        )
+
+    if not suggestion:
+        suggestion = (
+            "واکنش بازار و داده‌های مرتبط "
+            "با این خبر را زیر نظر داشته باشید."
+        )
+
+    if not source:
+        source = article["source"]
+
+    # Escape HTML
+    headline = html.escape(
+        headline
+    )
+
+    summary = html.escape(
+        summary
+    )
+
+    analysis = html.escape(
+        analysis
+    )
+
+    suggestion = html.escape(
+        suggestion
+    )
+
+    source = html.escape(
+        source
+    )
+
+    link = html.escape(
+        article["link"],
+        quote=True
+    )
+
+    message = f"""
+<b>📰 {headline}</b>
+
+<b>خلاصه خبر</b>
+{summary}
+
+━━━━━━━━━━━━━━
+
+<b>📊 تحلیل میرزا</b>
+{analysis}
+
+━━━━━━━━━━━━━━
+
+<b>💡 پیشنهاد میرزا</b>
+{suggestion}
+
+━━━━━━━━━━━━━━
+
+<b>🔗 منبع</b>
+<a href="{link}">{source}</a>
+
+<i>میرزا | رصد و تحلیل بازارهای مالی</i>
+"""
+
+    return message.strip()
+
+
+# =========================================================
+# SEND TELEGRAM
 # =========================================================
 
 def send_telegram(
@@ -1272,6 +1398,8 @@ def send_telegram(
         "chat_id": CHAT_ID,
 
         "text": message,
+
+        "parse_mode": "HTML",
 
         "disable_web_page_preview": False
 
@@ -1303,7 +1431,7 @@ def send_telegram(
         )
 
         print(
-            response.text[:1000]
+            response.text[:1500]
         )
 
         return False
@@ -1337,7 +1465,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # CHECK ENVIRONMENT
+    # CHECK
     # -----------------------------------------------------
 
     if not check_environment():
@@ -1345,7 +1473,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # LOAD SENT NEWS
+    # LOAD SENT
     # -----------------------------------------------------
 
     sent_news = load_sent_news()
@@ -1356,7 +1484,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # COLLECT NEWS
+    # COLLECT
     # -----------------------------------------------------
 
     news = collect_news()
@@ -1388,15 +1516,12 @@ def main():
     )
 
     # -----------------------------------------------------
-    # PREPARE CANDIDATES
+    # CANDIDATES
     # -----------------------------------------------------
 
     candidates = prepare_candidates(
-
         news,
-
         sent_news
-
     )
 
     print(
@@ -1413,21 +1538,17 @@ def main():
         return
 
     # -----------------------------------------------------
-    # SHOW CANDIDATES
+    # SHOW TOP CANDIDATES
     # -----------------------------------------------------
 
     print()
-
     print(
         "Top candidates:"
     )
 
     for i, article in enumerate(
-
         candidates,
-
         start=1
-
     ):
 
         print(
@@ -1465,22 +1586,13 @@ def main():
         return
 
     # -----------------------------------------------------
-    # GET RESULT
+    # SELECTED INDEX
     # -----------------------------------------------------
 
     selected_index = result.get(
         "selected_index",
         0
     )
-
-    message = result.get(
-        "message",
-        ""
-    )
-
-    # -----------------------------------------------------
-    # NO IMPORTANT NEWS
-    # -----------------------------------------------------
 
     if selected_index == 0:
 
@@ -1491,7 +1603,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # VALIDATE INDEX
+    # VALIDATE
     # -----------------------------------------------------
 
     if not isinstance(
@@ -1523,14 +1635,6 @@ def main():
 
         return
 
-    if not message:
-
-        print(
-            "Gemini returned empty message."
-        )
-
-        return
-
     # -----------------------------------------------------
     # SELECT ARTICLE
     # -----------------------------------------------------
@@ -1540,7 +1644,6 @@ def main():
     ]
 
     print()
-
     print(
         "Selected news:"
     )
@@ -1555,7 +1658,24 @@ def main():
     )
 
     # -----------------------------------------------------
-    # SEND TO TELEGRAM
+    # FORMAT MESSAGE
+    # -----------------------------------------------------
+
+    message = format_telegram_message(
+
+        result,
+
+        selected_article
+
+    )
+
+    print()
+    print(
+        "Final Telegram message prepared."
+    )
+
+    # -----------------------------------------------------
+    # SEND
     # -----------------------------------------------------
 
     success = send_telegram(
@@ -1571,7 +1691,7 @@ def main():
         return
 
     # -----------------------------------------------------
-    # SAVE ONLY SUCCESSFULLY SENT NEWS
+    # SAVE ONLY AFTER SUCCESS
     # -----------------------------------------------------
 
     sent_news.add(
@@ -1600,7 +1720,7 @@ def main():
 
 
 # =========================================================
-# START
+# RUN
 # =========================================================
 
 if __name__ == "__main__":
