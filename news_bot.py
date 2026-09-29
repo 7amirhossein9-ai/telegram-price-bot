@@ -1,38 +1,61 @@
 import os
-import re
-import html
 import time
 import requests
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-RSS_FEEDS = {
-    "بازار و اقتصاد": "https://www.investing.com/rss/121899.rss",
-    "کالا و طلا": "https://www.investing.com/rss/commodities.rss",
-    "کریپتو": "https://www.investing.com/rss/302.rss",
-}
+# مدل رایگان Gemini
+GEMINI_MODEL = "gemini-3.7-flash"
+
+MAX_CANDIDATES = 15
 
 SENT_FILE = "sent_news.txt"
 
-MAX_NEWS_PER_RUN = 1
 
-GEMINI_MODEL = "gemini-3.5-flash-lite"
+# =========================================================
+# NEWS SOURCES
+# =========================================================
+
+RSS_FEEDS = {
+
+    "اقتصاد و بازار":
+        "https://www.investing.com/rss/121899.rss",
+
+    "کالا و طلا":
+        "https://www.investing.com/rss/commodities.rss",
+
+    "کریپتو":
+        "https://www.investing.com/rss/302.rss",
+
+}
 
 
-def clean_text(text):
+# =========================================================
+# CHECK ENVIRONMENT
+# =========================================================
 
-    if not text:
-        return ""
+if not BOT_TOKEN:
+    raise Exception("BOT_TOKEN is missing")
 
-    text = html.unescape(text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text)
+if not CHAT_ID:
+    raise Exception("CHAT_ID is missing")
 
-    return text.strip()
+if not GEMINI_API_KEY:
+    raise Exception("GEMINI_API_KEY is missing")
 
+
+# =========================================================
+# SENT NEWS
+# =========================================================
 
 def load_sent_news():
 
@@ -48,108 +71,230 @@ def load_sent_news():
         )
 
 
-def save_sent_news(sent):
+def save_sent_news(sent_news):
 
     with open(SENT_FILE, "w", encoding="utf-8") as file:
 
-        for item in sent:
-            file.write(item + "\n")
+        for link in sent_news:
+            file.write(link + "\n")
 
 
-def get_news(feed_url, category):
+# =========================================================
+# RSS READER
+# =========================================================
 
-    try:
+def get_news():
 
-        response = requests.get(
-            feed_url,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-            timeout=20
-        )
+    all_news = []
 
-        response.raise_for_status()
+    for category, url in RSS_FEEDS.items():
 
-        root = ET.fromstring(response.content)
+        try:
 
-        news = []
-
-        for item in root.findall(".//item"):
-
-            title = clean_text(
-                item.findtext("title", "")
+            response = requests.get(
+                url,
+                timeout=20,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                }
             )
 
-            link = item.findtext(
-                "link",
-                ""
-            ).strip()
+            response.raise_for_status()
 
-            description = clean_text(
-                item.findtext(
-                    "description",
-                    ""
-                )
+            root = ET.fromstring(response.content)
+
+            for item in root.findall(".//item"):
+
+                title = item.findtext("title")
+
+                link = item.findtext("link")
+
+                description = item.findtext("description")
+
+                pub_date = item.findtext("pubDate")
+
+                if not title or not link:
+                    continue
+
+                all_news.append({
+
+                    "category": category,
+
+                    "title": title.strip(),
+
+                    "link": link.strip(),
+
+                    "description": (
+                        description.strip()
+                        if description
+                        else ""
+                    ),
+
+                    "pub_date": (
+                        pub_date.strip()
+                        if pub_date
+                        else ""
+                    )
+
+                })
+
+        except Exception as error:
+
+            print(
+                f"RSS error [{category}]: {error}"
             )
 
-            if not title or not link:
-                continue
-
-            news.append({
-                "title": title,
-                "link": link,
-                "description": description,
-                "category": category
-            })
-
-        return news
-
-    except Exception as error:
-
-        print(f"RSS error: {error}")
-
-        return []
+    return all_news
 
 
-def ask_gemini(news):
+# =========================================================
+# REMOVE DUPLICATES
+# =========================================================
 
-    prompt = f"""
-تو تحلیلگر بازار مالی برای کانال تلگرامی Mirza هستی.
+def remove_duplicates(news):
 
-خبر زیر را بررسی کن.
+    result = []
 
-عنوان:
-{news["title"]}
+    seen_links = set()
 
-متن:
-{news["description"]}
+    seen_titles = set()
 
-فقط فارسی بنویس.
+    for item in news:
 
-ساختار:
+        link = item["link"]
 
-📝 خلاصه خبر:
-2 تا 3 جمله.
+        title = item["title"].lower()
 
-📊 تحلیل بازار:
-توضیح بده خبر چه اثری ممکن است روی
-طلا، دلار، نفت، بورس یا رمزارزها داشته باشد.
+        if link in seen_links:
+            continue
 
-📈 جهت احتمالی اثر:
-مثبت / منفی / خنثی / نامشخص
+        if title in seen_titles:
+            continue
 
-اگر اطلاعات کافی نیست:
-نامشخص
+        seen_links.add(link)
 
-🔎 نکته مهم:
-یک نکته کوتاه برای پیگیری بازار.
+        seen_titles.add(title)
 
-اطلاعاتی که در خبر نیست را به عنوان واقعیت اضافه نکن.
+        result.append(item)
 
-توصیه خرید یا فروش نده.
+    return result
 
-متن کوتاه و مناسب تلگرام باشد.
-"""
+
+# =========================================================
+# KEYWORD IMPORTANCE
+# =========================================================
+
+IMPORTANT_WORDS = [
+
+    # Crypto
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "eth",
+    "crypto",
+    "cryptocurrency",
+    "solana",
+    "xrp",
+
+    # Gold
+    "gold",
+    "silver",
+    "bullion",
+
+    # Economy
+    "inflation",
+    "interest rate",
+    "fed",
+    "federal reserve",
+    "ecb",
+    "central bank",
+    "recession",
+    "gdp",
+    "jobs",
+    "employment",
+    "unemployment",
+
+    # Markets
+    "stock",
+    "stocks",
+    "shares",
+    "nasdaq",
+    "s&p",
+    "dow",
+    "market",
+
+    # Commodities
+    "oil",
+    "crude",
+    "opec",
+
+    # Politics / geopolitics
+    "trump",
+    "tariff",
+    "sanction",
+    "sanctions",
+    "iran",
+    "israel",
+    "ukraine",
+    "russia",
+    "china",
+    "war",
+    "election",
+
+]
+
+
+def keyword_score(item):
+
+    text = (
+        item["title"] +
+        " " +
+        item["description"]
+    ).lower()
+
+    score = 0
+
+    for word in IMPORTANT_WORDS:
+
+        if word in text:
+
+            score += 3
+
+    return score
+
+
+# =========================================================
+# PRE-FILTER NEWS
+# =========================================================
+
+def prepare_candidates(news, sent_news):
+
+    candidates = []
+
+    for item in news:
+
+        if item["link"] in sent_news:
+            continue
+
+        score = keyword_score(item)
+
+        item["keyword_score"] = score
+
+        candidates.append(item)
+
+    candidates.sort(
+        key=lambda x: x["keyword_score"],
+        reverse=True
+    )
+
+    return candidates[:MAX_CANDIDATES]
+
+
+# =========================================================
+# GEMINI
+# =========================================================
+
+def ask_gemini(prompt):
 
     url = (
         "https://generativelanguage.googleapis.com/"
@@ -165,15 +310,31 @@ def ask_gemini(news):
     }
 
     data = {
+
         "contents": [
+
             {
+
                 "parts": [
+
                     {
                         "text": prompt
                     }
+
                 ]
+
             }
-        ]
+
+        ],
+
+        "generationConfig": {
+
+            "temperature": 0.2,
+
+            "maxOutputTokens": 900
+
+        }
+
     }
 
     for attempt in range(3):
@@ -182,183 +343,341 @@ def ask_gemini(news):
 
             response = requests.post(
                 url,
-                headers=headers,
                 params=params,
+                headers=headers,
                 json=data,
                 timeout=60
             )
 
-            if response.status_code == 200:
-
-                result = response.json()
-
-                return (
-                    result["candidates"][0]
-                    ["content"]["parts"][0]["text"]
-                )
-
             if response.status_code in [429, 503]:
 
                 print(
-                    f"Gemini temporary error "
-                    f"{response.status_code}. "
-                    f"Attempt {attempt + 1}/3"
+                    f"Gemini temporary error: "
+                    f"{response.status_code}"
                 )
 
                 if attempt < 2:
+
                     time.sleep(20)
+
                     continue
 
-                raise Exception(
-                    f"Gemini unavailable: "
-                    f"HTTP {response.status_code}"
-                )
-
-            print(
-                "Gemini response:",
-                response.text[:1000]
-            )
+                return None
 
             response.raise_for_status()
 
-        except requests.exceptions.RequestException as error:
+            result = response.json()
 
-            if attempt == 2:
-                raise error
-
-            print(
-                f"Connection error. "
-                f"Retry {attempt + 1}/3"
+            return (
+                result["candidates"][0]
+                ["content"]["parts"][0]["text"]
             )
 
-            time.sleep(20)
+        except Exception as error:
 
-    raise Exception(
-        "Gemini request failed."
-    )
+            print(
+                f"Gemini error: {error}"
+            )
+
+            if attempt < 2:
+
+                time.sleep(20)
+
+            else:
+
+                return None
+
+    return None
 
 
-def send_to_telegram(message):
+# =========================================================
+# AI NEWS SELECTION + ANALYSIS
+# =========================================================
+
+def analyze_news(candidates):
+
+    news_text = ""
+
+    for index, item in enumerate(candidates, start=1):
+
+        news_text += f"""
+
+خبر شماره {index}
+
+دسته:
+{item["category"]}
+
+عنوان:
+{item["title"]}
+
+توضیح:
+{item["description"]}
+
+زمان:
+{item["pub_date"]}
+
+لینک:
+{item["link"]}
+
+امتیاز اولیه:
+{item["keyword_score"]}
+
+--------------------------------
+"""
+
+
+    prompt = f"""
+تو سردبیر حرفه‌ای یک کانال فارسی به نام «میرزا» هستی.
+
+وظیفه تو این است که از بین خبرهای زیر فقط
+مهم‌ترین خبر اقتصادی/بازاری روز را انتخاب کنی.
+
+موضوعات مهم:
+
+- طلا
+- بیت‌کوین
+- اتریوم
+- رمزارزها
+- سهام و بورس
+- شرکت‌های بزرگ
+- دلار و ارز
+- نفت
+- تورم
+- نرخ بهره
+- بانک‌های مرکزی
+- اقتصاد جهانی
+- سیاست‌هایی که روی اقتصاد و بازار اثر دارند
+- جنگ، تحریم، تعرفه و تنش‌های ژئوپلیتیکی با اثر اقتصادی
+
+خبر را با این معیارها بررسی کن:
+
+1. تازگی خبر
+2. اهمیت واقعی
+3. اثر احتمالی روی بازار
+4. میزان توجه بازار به موضوع
+5. ارتباط با طلا، کریپتو، سهام، ارز یا اقتصاد
+6. تکراری نبودن
+7. معتبر بودن منبع
+
+اگر چند خبر مهم هستند، فقط یکی را انتخاب کن.
+
+نکته مهم:
+
+خبرهای صرفاً سرگرمی، تبلیغاتی، کم‌اهمیت،
+تحلیل‌های بدون اتفاق جدید و اخبار تکراری را انتخاب نکن.
+
+اگر هیچ خبر واقعاً مهمی وجود ندارد،
+دقیقاً بنویس:
+
+NO_IMPORTANT_NEWS
+
+
+اگر خبر مربوط به یک سهم یا شرکت است:
+
+- اسم شرکت را واضح بنویس.
+- اگر نماد سهام در خبر وجود دارد، نماد را هم بنویس.
+- توضیح بده خبر چه اثری می‌تواند روی آن شرکت یا صنعت داشته باشد.
+- در پایان لینک اصلی خبر را برای اطلاعات بیشتر قرار بده.
+
+اگر خبر مربوط به اتریوم یا بیت‌کوین است:
+
+- توضیح بده چه اتفاقی افتاده.
+- چرا برای بازار مهم است.
+- اثر احتمالی روی بازار کریپتو را توضیح بده.
+
+اگر خبر مربوط به طلا است:
+
+- توضیح بده چرا طلا تحت تأثیر این خبر قرار گرفته.
+- در صورت ارتباط، نرخ بهره، دلار، تورم یا ریسک‌های ژئوپلیتیکی را توضیح بده.
+
+اگر خبر سیاسی است:
+
+فقط اثر اقتصادی و بازاری آن را توضیح بده.
+از تبلیغ یا حمایت از هیچ حزب، فرد یا جریان سیاسی خودداری کن.
+
+هیچ توصیه خرید یا فروش نده.
+
+متن نهایی باید فارسی، کوتاه و کاربردی باشد.
+
+حداکثر حدود 250 کلمه.
+
+ساختار خروجی:
+
+🔥 تیتر
+
+📰 چه اتفاقی افتاده؟
+یک توضیح کوتاه و واضح.
+
+📊 تحلیل میرزا
+توضیح بده این خبر چرا مهم است و چه بازارهایی ممکن است تحت تأثیر قرار بگیرند.
+
+🎯 بازار مرتبط
+مثلاً:
+طلا / اتریوم / بیت‌کوین / سهام / دلار / نفت / اقتصاد
+
+📈 جهت احتمالی اثر
+مثبت / منفی / خنثی / نامشخص
+
+⚠️ نکته مهم
+یک نکته مهم که مخاطب باید بداند.
+
+🔗 اطلاعات بیشتر:
+لینک اصلی خبر
+
+#میرزا
+
+اخبار:
+
+{news_text}
+"""
+
+
+    return ask_gemini(prompt)
+
+
+# =========================================================
+# TELEGRAM
+# =========================================================
+
+def send_telegram(message):
 
     url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
+        f"https://api.telegram.org/bot"
+        f"{BOT_TOKEN}/sendMessage"
     )
 
     data = {
+
         "chat_id": CHAT_ID,
+
         "text": message,
-        "parse_mode": "HTML",
+
         "disable_web_page_preview": False
+
     }
 
     response = requests.post(
         url,
         data=data,
-        timeout=20
+        timeout=30
     )
 
     response.raise_for_status()
 
+    return True
+
+
+# =========================================================
+# MAIN
+# =========================================================
 
 def main():
 
-    if not BOT_TOKEN:
-        raise Exception(
-            "BOT_TOKEN is missing."
-        )
-
-    if not CHAT_ID:
-        raise Exception(
-            "CHAT_ID is missing."
-        )
-
-    if not GEMINI_API_KEY:
-        raise Exception(
-            "GEMINI_API_KEY is missing."
-        )
+    print("Starting Mirza News Bot...")
 
     sent_news = load_sent_news()
 
-    all_news = []
-
-    for category, feed_url in RSS_FEEDS.items():
-
-        news = get_news(
-            feed_url,
-            category
-        )
-
-        all_news.extend(news)
-
     print(
-        f"Total RSS news found: {len(all_news)}"
+        f"Previously sent news: "
+        f"{len(sent_news)}"
     )
 
-    for news in all_news:
-
-        news_id = news["link"]
-
-        if news_id in sent_news:
-            continue
-
-        print(
-            f"New news found: {news['title']}"
-        )
-
-        try:
-
-            ai_text = ask_gemini(news)
-
-            message = f"""
-<b>📰 خبر جدید بازار</b>
-
-<b>{html.escape(news["title"])}</b>
-
-📌 حوزه:
-{html.escape(news["category"])}
-
-━━━━━━━━━━━━━━
-
-<b>🤖 خلاصه و تحلیل میرزا</b>
-
-{html.escape(ai_text)}
-
-━━━━━━━━━━━━━━
-
-🔗 <a href="{html.escape(news["link"])}">منبع اصلی خبر</a>
-
-#میرزا #بازار #تحلیل
-"""
-
-            send_to_telegram(message)
-
-            sent_news.add(news_id)
-
-            save_sent_news(sent_news)
-
-            print(
-                "Telegram message sent successfully."
-            )
-
-            print(
-                "Finished. Published: 1"
-            )
-
-            return
-
-        except Exception as error:
-
-            print(
-                f"Processing stopped: {error}"
-            )
-
-            return
+    # دریافت اخبار
+    news = get_news()
 
     print(
-        "Finished. Published: 0"
+        f"Total RSS news found: "
+        f"{len(news)}"
+    )
+
+    # حذف تکراری‌ها
+    news = remove_duplicates(news)
+
+    print(
+        f"After duplicate removal: "
+        f"{len(news)}"
+    )
+
+    # انتخاب کاندیداها
+    candidates = prepare_candidates(
+        news,
+        sent_news
+    )
+
+    print(
+        f"Candidate news: "
+        f"{len(candidates)}"
+    )
+
+    if not candidates:
+
+        print(
+            "No new candidate news."
+        )
+
+        return
+
+
+    # تحلیل با Gemini
+    result = analyze_news(
+        candidates
+    )
+
+    if not result:
+
+        print(
+            "Gemini failed."
+        )
+
+        return
+
+
+    # هیچ خبر مهمی نبود
+    if "NO_IMPORTANT_NEWS" in result:
+
+        print(
+            "No important news found."
+        )
+
+        return
+
+
+    # ارسال به تلگرام
+    try:
+
+        send_telegram(result)
+
+        print(
+            "Telegram message sent successfully."
+        )
+
+    except Exception as error:
+
+        print(
+            f"Telegram error: {error}"
+        )
+
+        return
+
+
+    # لینک‌های کاندیدا را ثبت می‌کنیم
+    # تا در اجرای بعدی دوباره بررسی نشوند.
+
+    for item in candidates:
+
+        sent_news.add(
+            item["link"]
+        )
+
+    save_sent_news(
+        sent_news
+    )
+
+    print(
+        "Finished. Published: 1"
     )
 
 
 if __name__ == "__main__":
+
     main()
