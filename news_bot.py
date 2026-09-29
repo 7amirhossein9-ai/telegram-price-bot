@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 RSS_FEEDS = {
     "بازار و اقتصاد": "https://www.investing.com/rss/121899.rss",
@@ -16,7 +16,7 @@ RSS_FEEDS = {
 
 SENT_FILE = "sent_news.txt"
 
-MAX_NEWS_PER_RUN = 2
+MAX_NEWS_PER_RUN = 1
 
 
 def clean_text(text):
@@ -65,38 +65,21 @@ def get_news(feed_url, category):
 
         response.raise_for_status()
 
-        root = ET.fromstring(
-            response.content
-        )
+        root = ET.fromstring(response.content)
 
         news = []
 
         for item in root.findall(".//item"):
 
-            title = item.findtext(
-                "title",
-                ""
-            )
-
-            link = item.findtext(
-                "link",
-                ""
-            )
-
+            title = item.findtext("title", "")
+            link = item.findtext("link", "")
             description = item.findtext(
                 "description",
                 ""
             )
 
-            pub_date = item.findtext(
-                "pubDate",
-                ""
-            )
-
             title = clean_text(title)
-            description = clean_text(
-                description
-            )
+            description = clean_text(description)
 
             if not title or not link:
                 continue
@@ -105,7 +88,6 @@ def get_news(feed_url, category):
                 "title": title,
                 "link": link.strip(),
                 "description": description,
-                "date": pub_date,
                 "category": category
             })
 
@@ -113,19 +95,17 @@ def get_news(feed_url, category):
 
     except Exception as error:
 
-        print(
-            f"RSS error: {error}"
-        )
+        print(f"RSS error: {error}")
 
         return []
 
 
-def ask_ai(news):
+def ask_gemini(news):
 
     prompt = f"""
-تو یک تحلیلگر بازار مالی برای کانال تلگرامی Mirza هستی.
+تو تحلیلگر بازار مالی کانال تلگرامی Mirza هستی.
 
-خبر زیر را بررسی کن.
+این خبر را تحلیل کن.
 
 عنوان:
 {news["title"]}
@@ -133,51 +113,58 @@ def ask_ai(news):
 متن خبر:
 {news["description"]}
 
-خروجی را فقط به زبان فارسی تولید کن.
+خروجی فقط فارسی باشد.
 
-خروجی شامل این بخش‌ها باشد:
+ساختار خروجی:
 
-1. خلاصه خبر
-در 2 تا 3 جمله توضیح بده خبر درباره چیست.
+📝 خلاصه خبر:
+در 2 تا 3 جمله توضیح بده خبر چیست.
 
-2. تحلیل بازار
-توضیح بده این خبر ممکن است روی کدام بازارها اثر بگذارد:
-طلا، دلار، نفت، بورس یا رمزارزها.
+📊 تحلیل بازار:
+توضیح بده این خبر چه ارتباطی با طلا، دلار،
+نفت، بورس یا رمزارزها دارد.
 
-3. جهت احتمالی اثر
-اگر شواهد کافی وجود دارد بگو:
-مثبت
-منفی
-خنثی
-یا نامشخص
+📈 جهت احتمالی اثر:
+مثبت، منفی، خنثی یا نامشخص.
 
-اگر اطلاعات کافی برای تعیین جهت وجود ندارد، صریحاً بگو «نامشخص».
+اگر اطلاعات کافی وجود ندارد، بنویس:
+نامشخص
 
-4. نکته مهم
-یک نکته کوتاه درباره چیزی که معامله‌گران باید برای ارزیابی اثر واقعی خبر زیر نظر داشته باشند.
+🔎 نکته مهم:
+یک نکته کوتاه بگو که برای بررسی اثر واقعی خبر
+باید زیر نظر گرفته شود.
 
-هیچ اطلاعاتی را که در خبر وجود ندارد به عنوان واقعیت اضافه نکن.
+اطلاعاتی که در خبر وجود ندارد را به عنوان واقعیت اضافه نکن.
 
-تحلیل قطعی یا توصیه خرید و فروش ارائه نده.
+توصیه خرید یا فروش نده.
 
-مختصر و مناسب انتشار در تلگرام بنویس.
+تحلیل را کوتاه و مناسب تلگرام بنویس.
 """
 
-    url = "https://api.openai.com/v1/responses"
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/gemini-3.8-flash:generateContent"
+    )
 
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+    params = {
+        "key": GEMINI_API_KEY
     }
 
     data = {
-        "model": "gpt-5.6-luna",
-        "input": prompt
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ]
     }
 
     response = requests.post(
         url,
-        headers=headers,
+        params=params,
         json=data,
         timeout=60
     )
@@ -186,7 +173,10 @@ def ask_ai(news):
 
     result = response.json()
 
-    return result["output"][0]["content"][0]["text"]
+    return (
+        result["candidates"][0]
+        ["content"]["parts"][0]["text"]
+    )
 
 
 def send_to_telegram(message):
@@ -215,19 +205,13 @@ def send_to_telegram(message):
 def main():
 
     if not BOT_TOKEN:
-        raise Exception(
-            "BOT_TOKEN is missing."
-        )
+        raise Exception("BOT_TOKEN is missing.")
 
     if not CHAT_ID:
-        raise Exception(
-            "CHAT_ID is missing."
-        )
+        raise Exception("CHAT_ID is missing.")
 
-    if not OPENAI_API_KEY:
-        raise Exception(
-            "OPENAI_API_KEY is missing."
-        )
+    if not GEMINI_API_KEY:
+        raise Exception("GEMINI_API_KEY is missing.")
 
     sent_news = load_sent_news()
 
@@ -253,7 +237,7 @@ def main():
 
         try:
 
-            ai_text = ask_ai(news)
+            ai_text = ask_gemini(news)
 
             message = f"""
 <b>📰 خبر جدید بازار</b>
