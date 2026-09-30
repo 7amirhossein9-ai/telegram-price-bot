@@ -2,7 +2,7 @@ name: Daily Technical Analysis
 
 on:
   schedule:
-    - cron: "30 5 * * *"
+    - cron: "* * * * *"
 
   workflow_dispatch:
 
